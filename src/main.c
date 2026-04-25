@@ -40,17 +40,13 @@ int main(int argc, char *argv[]) {
 
   fastObjMesh *brush = fast_obj_read("./bin/assets/ship.obj");
   assert(brush != 0);
-  SomeShitAllocated index_buffer;
-  unsigned int index_count = obj_to_indexbuffer(brush, &index_buffer);
   SomeShitAllocated vertex_buffer;
-  vlk_allocateSomeShit(sizeof(float) * 3 * brush->position_count, &vertex_buffer);
-  memcpy(vertex_buffer.the_shit_on_host, brush->positions, brush->position_count * 3 * sizeof(float));
+  unsigned int vertex_count = obj_to_indexbuffer(brush, &vertex_buffer);
 
   float time;
 
   while (!done) {
     float delta_t_f32 = ((float)(SDL_GetTicksNS() - time)) / 1e9f;
-    float time_f32    = (float)(SDL_GetTicksNS()) / 1e9f;
     time              = SDL_GetTicksNS();
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
@@ -83,9 +79,15 @@ int main(int argc, char *argv[]) {
 
     if (vlk_beginDraw() != 0)
       continue;
-    vkCmdBindIndexBuffer(GAME_VK_COMMAND_BUFFER, GAME_VK_ALL_THE_DATA, index_buffer.offset, VK_INDEX_TYPE_UINT32);
-    vkCmdDrawIndexed(GAME_VK_COMMAND_BUFFER, index_count, 1, 0, 0, 0);
-    vkCmdDraw(GAME_VK_COMMAND_BUFFER, 3, 1, 0, 0);
+
+    PushConstant pc = {
+        .vertex_buffer = vertex_buffer.the_shit_on_device,
+    };
+    memcpy(pc.viewproj, GAME_VIEWPROJ, sizeof(GAME_VIEWPROJ));
+    vkCmdPushConstants(GAME_VK_COMMAND_BUFFER, GAME_VK_PIPELINE_LAYOUT,
+                       VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(PushConstant),
+                       &pc);
+    vkCmdDraw(GAME_VK_COMMAND_BUFFER, vertex_count, 1, 0, 0);
     vlk_endDraw();
   }
 

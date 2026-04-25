@@ -16,7 +16,7 @@ bin/assets: assets | bin
 	cp -r assets bin/assets
 
 bin:
-	mkdir -p bin
+	mkdir -p bin bin/assets bin/shaders
 
 run: all
 	./bin/main

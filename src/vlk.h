@@ -60,6 +60,7 @@ VkFence GAME_PRESENT_FENCE;
 
 // Render state
 uint32_t GAME_CURRENT_SWAPCHAIN_IMAGE = 0;
+mat4 GAME_VIEWPROJ;
 
 // Camera shit
 vec3 GAME_CAM_POS;
@@ -88,6 +89,11 @@ void vlk_createShaderModule(char *path, VkShaderModule *module) {
                        0, module);
 }
 
+typedef struct {
+  mat4 viewproj;
+  VkDeviceAddress vertex_buffer;
+} PushConstant;
+
 typedef struct SomeShitAllocated {
   void *the_shit_on_host;
   VkDeviceAddress the_shit_on_device;
@@ -102,23 +108,27 @@ void vlk_allocateSomeShit(size_t size, SomeShitAllocated *out_buff) {
           .sType  = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO});
 
   out_buff->the_shit_on_device = addr + ALL_THE_DATA_HEAD;
-  out_buff->the_shit_on_host   = &GAME_VK_ALL_THE_DATA_HOST[ALL_THE_DATA_HEAD];
-  out_buff->offset = ALL_THE_DATA_HEAD;
+  out_buff->the_shit_on_host   = GAME_VK_ALL_THE_DATA_HOST + ALL_THE_DATA_HEAD;
+  out_buff->offset             = ALL_THE_DATA_HEAD;
   ALL_THE_DATA_HEAD += size;
 
   return;
 }
 
-unsigned int obj_to_indexbuffer(fastObjMesh *brush,
-                                SomeShitAllocated *index_buffer) {
+typedef struct Vertex {
+  vec3 pos;
+  vec3 norm;
+} Vertex;
 
-  // First calculate the number of indices
+unsigned int obj_to_indexbuffer(fastObjMesh *brush,
+                                SomeShitAllocated *vertex_buffer) {
+
+  // First calculate the number of vertices
   unsigned int out_index_count = 0;
 
   // For each group in the obj
   for (int group_n = 0; group_n < brush->group_count; group_n++) {
     fastObjGroup grp = brush->groups[group_n];
-    unsigned int idx = grp.index_offset;
 
     // For each face in the group
     for (int face_n = 0; face_n < grp.face_count; face_n++) {
@@ -131,10 +141,11 @@ unsigned int obj_to_indexbuffer(fastObjMesh *brush,
     }
   }
 
-  vlk_allocateSomeShit(out_index_count * sizeof(uint32_t), index_buffer);
-  uint32_t *index_buffer_write = (uint32_t *)(index_buffer->the_shit_on_host);
+  // Position and normal
+  vlk_allocateSomeShit(out_index_count * sizeof(Vertex), vertex_buffer);
+  Vertex *vertex_buffer_write = (Vertex *)(vertex_buffer->the_shit_on_host);
 
-  // Now populate the index array
+  // Now populate the verts
   uint32_t out_idx = 0;
 
   // For each group in the obj
@@ -155,15 +166,33 @@ unsigned int obj_to_indexbuffer(fastObjMesh *brush,
       for (int tri_n = 0; tri_n <= vert_count - 3; tri_n++) {
 
         // First index (of the tri) is always the first index of the face
-        index_buffer_write[out_idx++] =
-            brush->indices[face_start].p;
+        vertex_buffer_write[out_idx++] = (Vertex) {
+          .pos  = {brush->positions[brush->indices[face_start].p * 3],
+                   brush->positions[brush->indices[face_start].p * 3 + 1],
+                   brush->positions[brush->indices[face_start].p * 3 + 2]},
+          .norm = {
+            brush->normals[brush->indices[face_start].n * 3],
+            brush->normals[brush->indices[face_start].n * 3 + 1],
+            brush->normals[brush->indices[face_start].n * 3 + 2]
+          }
+        };
 
-        // Then we fan out over the rest of the verts
-        index_buffer_write[out_idx++] = brush->indices[idx + 1].p;
-        index_buffer_write[out_idx++] = brush->indices[idx + 2].p;
-
-        // The result of the above for a quad (0, 1, 2, 3) should be:
-        // (0, 1, 2), (0, 2, 3)
+        // Other two points, step through
+        vertex_buffer_write[out_idx++] = (Vertex){
+            .pos  = {brush->positions[brush->indices[idx + 1].p * 3],
+                     brush->positions[brush->indices[idx + 1].p * 3 + 1],
+                     brush->positions[brush->indices[idx + 1].p * 3 + 2]},
+            .norm = {brush->normals[brush->indices[idx + 1].n * 3],
+                     brush->normals[brush->indices[idx + 1].n * 3 + 1],
+                     brush->normals[brush->indices[idx + 1].n * 3 + 2]}};
+        vertex_buffer_write[out_idx++] = (Vertex){
+            .pos  = {brush->positions[brush->indices[idx + 2].p * 3],
+                     brush->positions[brush->indices[idx + 2].p * 3 + 1],
+                     brush->positions[brush->indices[idx + 2].p * 3 + 2]},
+            .norm = {brush->normals[brush->indices[idx + 2].n * 3],
+                     brush->normals[brush->indices[idx + 2].n * 3 + 1],
+                     brush->normals[brush->indices[idx + 2].n * 3 + 2]}};
+        // Index (0,1,2),(0,2,3), (0,3,4) for a 5-gon
 
         // The index array stores faces contiguously, we are *actually* looping
         // the entire index array a single time after we loop over each face.
@@ -296,17 +325,21 @@ void vlk_init(SDL_Window *window) {
                               &(VkPhysicalDeviceBufferDeviceAddressFeatures){
                                   .sType =
                                       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES,
-                                  .bufferDeviceAddress = VK_TRUE}}},
+                                  .bufferDeviceAddress = VK_TRUE,
+                                  .pNext =
+                                      &(VkPhysicalDeviceScalarBlockLayoutFeatures){
+                                          .sType =
+                                              VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SCALAR_BLOCK_LAYOUT_FEATURES,
+                                          .scalarBlockLayout = VK_TRUE}}}},
           .queueCreateInfoCount  = 1,
-          .enabledExtensionCount = 5,
+          .enabledExtensionCount = 6,
           .ppEnabledExtensionNames =
-              (const char *[]){
-                  VK_KHR_SWAPCHAIN_EXTENSION_NAME,
-                  VK_KHR_UNIFIED_IMAGE_LAYOUTS_EXTENSION_NAME,
-                  VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME,
-                  VK_KHR_DEPTH_STENCIL_RESOLVE_EXTENSION_NAME,
-                  VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME,
-              },
+              (const char *[]){VK_KHR_SWAPCHAIN_EXTENSION_NAME,
+                               VK_KHR_UNIFIED_IMAGE_LAYOUTS_EXTENSION_NAME,
+                               VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME,
+                               VK_KHR_DEPTH_STENCIL_RESOLVE_EXTENSION_NAME,
+                               VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME,
+                               VK_EXT_SCALAR_BLOCK_LAYOUT_EXTENSION_NAME},
           .pQueueCreateInfos =
               &(const VkDeviceQueueCreateInfo){
                   .sType      = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
@@ -318,7 +351,8 @@ void vlk_init(SDL_Window *window) {
   vkCreateBuffer(
       GAME_VK_DEVICE,
       &(VkBufferCreateInfo){.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                     VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                     VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+                                     VK_BUFFER_USAGE_2_INDEX_BUFFER_BIT,
                             .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
                             .size  = 256ull * 1024 * 1024,
                             .sharingMode = VK_SHARING_MODE_EXCLUSIVE},
@@ -439,12 +473,12 @@ void vlk_createGraphicsPipeline() {
           .pPushConstantRanges =
               &(VkPushConstantRange){.offset     = 0,
                                      .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
-                                     .size       = sizeof(mat4)},
+                                     .size       = sizeof(PushConstant)},
           .pSetLayouts = &GAME_VK_DESCRIPTOR_SET_LAYOUT},
       0, &GAME_VK_PIPELINE_LAYOUT);
 
-  vlk_createShaderModule("./bin/vertex.spv", &GAME_VERT_MODULE);
-  vlk_createShaderModule("./bin/fragment.spv", &GAME_FRAG_MODULE);
+  vlk_createShaderModule("./bin/shaders/model_vertex.spv", &GAME_VERT_MODULE);
+  vlk_createShaderModule("./bin/shaders/model_fragment.spv", &GAME_FRAG_MODULE);
 
   vkCreateGraphicsPipelines(
       GAME_VK_DEVICE, VK_NULL_HANDLE, 1,
@@ -582,7 +616,7 @@ int vlk_beginDraw() {
                   .clearValue =
                       (VkClearValue){.color =
                                          (VkClearColorValue){
-                                             .float32 = {0.1, 0.1, 0.1, 1.}}},
+                                             .float32 = {0.0, 0.0, 0.0, 1.}}},
                   .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
                   .imageView =
                       GAME_SWAPCHAIN_IMAGE_VIEWS[GAME_CURRENT_SWAPCHAIN_IMAGE],
@@ -609,11 +643,7 @@ int vlk_beginDraw() {
                       });
 
   // Viewproj
-  mat4 viewproj;
-  glm_mat4_mul(GAME_PERSP_PROJ, view, viewproj);
-
-  vkCmdPushConstants(GAME_VK_COMMAND_BUFFER, GAME_VK_PIPELINE_LAYOUT,
-                     VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(mat4), viewproj);
+  glm_mat4_mul(GAME_PERSP_PROJ, view, GAME_VIEWPROJ);
 
   return 0;
 }
