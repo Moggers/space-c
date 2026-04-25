@@ -1,16 +1,15 @@
 CC = cc
-CFLAGS = -g -Wall
-LDFLAGS = -lSDL3 -lvulkan
+CFLAGS = -g -Wall 
+LDFLAGS = -lSDL3 -lvulkan -lm 
+all: bin/main bin/shaders/model_vertex.spv bin/shaders/model_fragment.spv bin/assets
 
-all: bin/main bin/vertex.spv bin/fragment.spv bin/assets
-
-bin/main: src/main.c | bin
+bin/main: src/* | bin
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
 
-bin/fragment.spv: src/shaders/test/fragment.frag | bin
+bin/shaders/model_fragment.spv: src/shaders/model.frag | bin
 	glslc $< -o $@
 
-bin/vertex.spv: src/shaders/test/vertex.vert | bin
+bin/shaders/model_vertex.spv: src/shaders/model.vert | bin
 	glslc $< -o $@
 
 bin/assets: assets | bin
