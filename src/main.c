@@ -2,6 +2,8 @@
 #include "./vlk.h"
 #include "vendor/cglm/affine-pre.h"
 #include "vendor/cglm/cglm.h"
+#include "vendor/cglm/mat4.h"
+#include "vendor/cglm/types.h"
 #include "vendor/cglm/vec3.h"
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_error.h>
@@ -70,12 +72,18 @@ int main(int argc, char *argv[]) {
 
     // Movedir
     vec3 trans;
-    vec3 movedir = {(keys[SDL_SCANCODE_D] - keys[SDL_SCANCODE_A]) * delta_t_f32,
-                    (keys[SDL_SCANCODE_Z] - keys[SDL_SCANCODE_X]) * delta_t_f32,
-                    (keys[SDL_SCANCODE_W] - keys[SDL_SCANCODE_S]) *
-                        delta_t_f32};
+    vec3 movedir = {
+        (keys[SDL_SCANCODE_D] - keys[SDL_SCANCODE_A]) * delta_t_f32 * 10,
+        (keys[SDL_SCANCODE_Z] - keys[SDL_SCANCODE_X]) * delta_t_f32 * 10,
+        (keys[SDL_SCANCODE_W] - keys[SDL_SCANCODE_S]) * delta_t_f32 * 10,
+    };
     glm_vec3_rotate_m4(GAME_CAM_ROT, movedir, trans);
     glm_vec3_add(GAME_CAM_POS, trans, GAME_CAM_POS);
+
+    mat4 identity;
+    glm_mat4_identity(identity);
+    addDraw(vertex_buffer.the_shit_on_device, vertex_count, (vec3){0., 0., 0.},
+            identity);
 
     if (vlk_beginDraw() != 0)
       continue;
@@ -87,7 +95,10 @@ int main(int argc, char *argv[]) {
     vkCmdPushConstants(GAME_VK_COMMAND_BUFFER, GAME_VK_PIPELINE_LAYOUT,
                        VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(PushConstant),
                        &pc);
-    vkCmdDraw(GAME_VK_COMMAND_BUFFER, vertex_count, 1, 0, 0);
+    vkCmdDrawIndirect(GAME_VK_COMMAND_BUFFER, GAME_VK_ALL_THE_DATA,
+                      GAME_DRAW_COMMANDS.bdaBufferOffset, GAME_DRAW_COUNT,
+                      sizeof(VkDrawIndirectCommand));
+    // vkCmdDraw(GAME_VK_COMMAND_BUFFER, vertex_count, 1, 0, 0);
     vlk_endDraw();
   }
 

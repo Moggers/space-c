@@ -29,6 +29,39 @@
   type name[name##_count];                                                     \
   fn(__VA_ARGS__, &name##_count, name);
 
+#define V3(v) {(v)[0], (v)[1], (v)[2]}
+#define M4(m)                                                                  \
+  {                                                                            \
+      (m)[0][0], (m)[0][1], (m)[0][2], (m)[0][3], (m)[1][0], (m)[1][1],        \
+      (m)[1][2], (m)[1][3], (m)[2][0], (m)[2][1], (m)[2][2], (m)[2][3],        \
+      (m)[3][0], (m)[3][1], (m)[3][2], (m)[3][3],                              \
+  }
+
+typedef struct SomeShitAllocated {
+  void *the_shit_on_host;
+  VkDeviceAddress the_shit_on_device;
+  uint32_t offset;
+} SomeShitAllocated;
+
+typedef struct InstanceData {
+  VkDeviceAddress vertex_buffer;
+  vec3 pos;
+  mat4 rot;
+} InstanceData;
+
+#define MAX_DRAWS 1024
+
+typedef struct DrawCommands {
+  VkDeviceAddress bdaDrawCommands;
+  VkDrawIndirectCommand *hostDrawCommands;
+  VkDeviceSize bdaBufferOffset;
+} DrawCommands;
+
+typedef struct InstanceDataBuffer {
+  VkDeviceAddress bdaInstanceBuffer;
+  InstanceData *hostInsanceBuffer;
+} InstanceDataBuffer;
+
 // Global vulkan shit
 VkInstance GAME_VK_INSTANCE              = VK_NULL_HANDLE;
 VkSurfaceKHR GAME_VK_SURFACE             = VK_NULL_HANDLE;
@@ -38,8 +71,15 @@ VkPhysicalDevice GAME_VK_PHYSICAL_DEVICE = VK_NULL_HANDLE;
 // Swapchain shit
 VkSwapchainKHR GAME_VK_SWAPCHAIN = VK_NULL_HANDLE;
 VkImage GAME_SWAPCHAIN_IMAGES[32];
-uint32_t GAME_SWAPCHAIN_IMAGE_COUNT = 32;
 VkImageView GAME_SWAPCHAIN_IMAGE_VIEWS[32];
+VkImage GAME_SWAPCHAIN_DEPTH_ATTACHMENTS[32];
+VkImageView GAME_SWAPCHAIN_DEPTH_VIEWS[32];
+uint32_t GAME_SWAPCHAIN_IMAGE_COUNT = 32;
+
+// Depth buffer
+VkDeviceMemory GAME_VK_DEPTH_MEMORY;
+VkImage GAME_VK_DEPTH_IMAGE;
+VkImageView GAME_VK_DEPTH_IMAGE_VIEW;
 
 // Queues and command buffers
 VkQueue GAME_VK_PRESENT_QUEUE          = VK_NULL_HANDLE;
@@ -61,6 +101,9 @@ VkFence GAME_PRESENT_FENCE;
 // Render state
 uint32_t GAME_CURRENT_SWAPCHAIN_IMAGE = 0;
 mat4 GAME_VIEWPROJ;
+DrawCommands GAME_DRAW_COMMANDS;
+InstanceDataBuffer GAME_INSTANCE_BUFFER;
+size_t GAME_DRAW_COUNT;
 
 // Camera shit
 vec3 GAME_CAM_POS;
@@ -71,6 +114,19 @@ mat4 GAME_PERSP_PROJ;
 VkBuffer GAME_VK_ALL_THE_DATA;
 void *GAME_VK_ALL_THE_DATA_HOST;
 size_t ALL_THE_DATA_HEAD;
+
+void addDraw(VkDeviceAddress vert_location, uint32_t vert_count, vec3 pos,
+             mat4 rot) {
+  GAME_DRAW_COMMANDS.hostDrawCommands[GAME_DRAW_COUNT] =
+      (VkDrawIndirectCommand){.vertexCount   = vert_count,
+                              .firstVertex   = 0,
+                              .instanceCount = 1,
+                              .firstInstance = 0};
+
+  GAME_INSTANCE_BUFFER.hostInsanceBuffer[GAME_DRAW_COUNT] = (InstanceData){
+      .vertex_buffer = vert_location, .pos = V3(pos), .rot = M4(rot)};
+  GAME_DRAW_COUNT++;
+}
 
 void vlk_createShaderModule(char *path, VkShaderModule *module) {
   FILE *f = fopen(path, "r");
@@ -94,12 +150,6 @@ typedef struct {
   VkDeviceAddress vertex_buffer;
 } PushConstant;
 
-typedef struct SomeShitAllocated {
-  void *the_shit_on_host;
-  VkDeviceAddress the_shit_on_device;
-  uint32_t offset;
-} SomeShitAllocated;
-
 void vlk_allocateSomeShit(size_t size, SomeShitAllocated *out_buff) {
   VkDeviceAddress addr = vkGetBufferDeviceAddress(
       GAME_VK_DEVICE,
@@ -118,7 +168,15 @@ void vlk_allocateSomeShit(size_t size, SomeShitAllocated *out_buff) {
 typedef struct Vertex {
   vec3 pos;
   vec3 norm;
+  vec3 col;
 } Vertex;
+
+vec3 debug_cols[4] = {
+    {1., 0., 0.},
+    {0., 1., 0.},
+    {0., 0., 1.},
+    {0., 1., 1.},
+};
 
 unsigned int obj_to_indexbuffer(fastObjMesh *brush,
                                 SomeShitAllocated *vertex_buffer) {
@@ -166,36 +224,28 @@ unsigned int obj_to_indexbuffer(fastObjMesh *brush,
       for (int tri_n = 0; tri_n <= vert_count - 3; tri_n++) {
 
         // First index (of the tri) is always the first index of the face
-        vertex_buffer_write[out_idx++] = (Vertex) {
-          .pos  = {brush->positions[brush->indices[face_start].p * 3],
-                   brush->positions[brush->indices[face_start].p * 3 + 1],
-                   brush->positions[brush->indices[face_start].p * 3 + 2]},
-          .norm = {
-            brush->normals[brush->indices[face_start].n * 3],
-            brush->normals[brush->indices[face_start].n * 3 + 1],
-            brush->normals[brush->indices[face_start].n * 3 + 2]
-          }
-        };
+        float *pos  = &brush->positions[brush->indices[face_start].p * 3];
+        float *norm = &brush->normals[brush->indices[face_start].n * 3];
+        float *col  = debug_cols[face_n & 0b11];
+        vertex_buffer_write[out_idx++] =
+            (Vertex){.pos = V3(pos), .norm = V3(norm), .col = V3(col)};
 
         // Other two points, step through
-        vertex_buffer_write[out_idx++] = (Vertex){
-            .pos  = {brush->positions[brush->indices[idx + 1].p * 3],
-                     brush->positions[brush->indices[idx + 1].p * 3 + 1],
-                     brush->positions[brush->indices[idx + 1].p * 3 + 2]},
-            .norm = {brush->normals[brush->indices[idx + 1].n * 3],
-                     brush->normals[brush->indices[idx + 1].n * 3 + 1],
-                     brush->normals[brush->indices[idx + 1].n * 3 + 2]}};
-        vertex_buffer_write[out_idx++] = (Vertex){
-            .pos  = {brush->positions[brush->indices[idx + 2].p * 3],
-                     brush->positions[brush->indices[idx + 2].p * 3 + 1],
-                     brush->positions[brush->indices[idx + 2].p * 3 + 2]},
-            .norm = {brush->normals[brush->indices[idx + 2].n * 3],
-                     brush->normals[brush->indices[idx + 2].n * 3 + 1],
-                     brush->normals[brush->indices[idx + 2].n * 3 + 2]}};
+        pos  = &brush->positions[brush->indices[idx + 1].p * 3];
+        norm = &brush->normals[brush->indices[idx + 1].n * 3];
+        col  = debug_cols[face_n & 0b11];
+        vertex_buffer_write[out_idx++] =
+            (Vertex){.pos = V3(pos), .norm = V3(norm), .col = V3(col)};
+        pos  = &brush->positions[brush->indices[idx + 2].p * 3];
+        norm = &brush->normals[brush->indices[idx + 2].n * 3];
+        col  = debug_cols[face_n & 0b11];
+        vertex_buffer_write[out_idx++] =
+            (Vertex){.pos = V3(pos), .norm = V3(norm), .col = V3(col)};
         // Index (0,1,2),(0,2,3), (0,3,4) for a 5-gon
 
-        // The index array stores faces contiguously, we are *actually* looping
-        // the entire index array a single time after we loop over each face.
+        // The index array stores faces contiguously, we are *actually*
+        // looping the entire index array a single time after we loop over
+        // each face.
         idx++;
       }
       // Because we loop as many times as we have vertices on the face - 2; we
@@ -205,6 +255,85 @@ unsigned int obj_to_indexbuffer(fastObjMesh *brush,
   }
 
   return out_index_count;
+}
+
+void vlk_CreateDepthBuffer() {
+  if (GAME_VK_DEPTH_IMAGE_VIEW != VK_NULL_HANDLE) {
+    vkDestroyImageView(GAME_VK_DEVICE, GAME_VK_DEPTH_IMAGE_VIEW, 0);
+    GAME_VK_DEPTH_IMAGE_VIEW = VK_NULL_HANDLE;
+  }
+  if (GAME_VK_DEPTH_IMAGE != VK_NULL_HANDLE) {
+    vkDestroyImage(GAME_VK_DEVICE, GAME_VK_DEPTH_IMAGE, 0);
+    GAME_VK_DEPTH_IMAGE = VK_NULL_HANDLE;
+  }
+  if (GAME_VK_DEPTH_MEMORY != VK_NULL_HANDLE) {
+    vkFreeMemory(GAME_VK_DEVICE, GAME_VK_DEPTH_MEMORY, 0);
+    GAME_VK_DEPTH_MEMORY = VK_NULL_HANDLE;
+  }
+
+  vkCreateImage(
+      GAME_VK_DEVICE,
+      &(VkImageCreateInfo){
+          .sType       = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+          .imageType   = VK_IMAGE_TYPE_2D,
+          .arrayLayers = 1,
+          .extent =
+              (VkExtent3D){
+                  .width  = GAME_SURFACE_CAPABILITIES.currentExtent.width,
+                  .height = GAME_SURFACE_CAPABILITIES.currentExtent.height,
+                  .depth  = 1},
+          .samples   = 1,
+          .format    = VK_FORMAT_D32_SFLOAT,
+          .usage     = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+          .mipLevels = 1,
+      },
+      0, &GAME_VK_DEPTH_IMAGE);
+  VkMemoryRequirements memreqs;
+  VkMemoryPropertyFlagBits wanted = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT |
+                                    VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+  vkGetImageMemoryRequirements(GAME_VK_DEVICE, GAME_VK_DEPTH_IMAGE, &memreqs);
+  VkPhysicalDeviceMemoryProperties memprops;
+  vkGetPhysicalDeviceMemoryProperties(GAME_VK_PHYSICAL_DEVICE, &memprops);
+  int memtype = -1;
+  for (int i = 0; i < memprops.memoryTypeCount; i++) {
+    // If this memory type is not one of the types usable by the buffer; skip
+    // it
+    if ((memreqs.memoryTypeBits & (1 << i)) == 0) {
+      continue;
+    }
+
+    // If the memory type does not have the flags we want, skip it.
+    if ((memprops.memoryTypes[i].propertyFlags & wanted) != wanted) {
+      continue;
+    }
+    // We found one we can use
+    memtype = i;
+    break;
+  }
+  assert(memtype != -1);
+  vkAllocateMemory(
+      GAME_VK_DEVICE,
+      &(VkMemoryAllocateInfo){.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+                              .allocationSize  = memreqs.size,
+                              .memoryTypeIndex = memtype},
+      0, &GAME_VK_DEPTH_MEMORY);
+  vkBindImageMemory(GAME_VK_DEVICE, GAME_VK_DEPTH_IMAGE, GAME_VK_DEPTH_MEMORY,
+                    0);
+
+  vkCreateImageView(
+      GAME_VK_DEVICE,
+      &(VkImageViewCreateInfo){
+          .sType    = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+          .image    = GAME_VK_DEPTH_IMAGE,
+          .viewType = VK_IMAGE_VIEW_TYPE_2D,
+          .format   = VK_FORMAT_D32_SFLOAT,
+          .subresourceRange =
+              (VkImageSubresourceRange){.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
+                                        .baseArrayLayer = 0,
+                                        .layerCount = VK_REMAINING_ARRAY_LAYERS,
+                                        .baseMipLevel = 0,
+                                        .levelCount = VK_REMAINING_MIP_LEVELS}},
+      0, &GAME_VK_DEPTH_IMAGE_VIEW);
 }
 
 // Returns 1 on failure
@@ -261,6 +390,7 @@ VkResult vlk_createSwapchain() {
     if (res != VK_SUCCESS)
       return res;
   }
+  vlk_CreateDepthBuffer();
   if (old != VK_NULL_HANDLE) {
     vkDeviceWaitIdle(GAME_VK_DEVICE);
     vkDestroySwapchainKHR(GAME_VK_DEVICE, old, 0);
@@ -270,7 +400,7 @@ VkResult vlk_createSwapchain() {
       glm_rad(100),
       (float)GAME_SURFACE_CAPABILITIES.currentExtent.width /
           (float)GAME_SURFACE_CAPABILITIES.currentExtent.height,
-      0.01f, 10.f, GAME_PERSP_PROJ);
+      1.f, 1000000.f, GAME_PERSP_PROJ);
   return VK_SUCCESS;
 }
 
@@ -352,6 +482,7 @@ void vlk_init(SDL_Window *window) {
       GAME_VK_DEVICE,
       &(VkBufferCreateInfo){.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                      VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+                                     VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
                                      VK_BUFFER_USAGE_2_INDEX_BUFFER_BIT,
                             .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
                             .size  = 256ull * 1024 * 1024,
@@ -366,7 +497,8 @@ void vlk_init(SDL_Window *window) {
   VkPhysicalDeviceMemoryProperties memprops;
   vkGetPhysicalDeviceMemoryProperties(GAME_VK_PHYSICAL_DEVICE, &memprops);
   for (int i = 0; i < memprops.memoryTypeCount; i++) {
-    // If this memory type is not one of the types usable by the buffer; skip it
+    // If this memory type is not one of the types usable by the buffer; skip
+    // it
     if ((memreqs.memoryTypeBits & (1 << i)) == 0) {
       continue;
     }
@@ -428,6 +560,19 @@ void vlk_init(SDL_Window *window) {
                             .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
                         },
                         0, &GAME_PRESENT_FENCE));
+
+  // Instances will go here
+  SomeShitAllocated instance_data;
+  vlk_allocateSomeShit(sizeof(InstanceData) * MAX_DRAWS, &instance_data);
+  GAME_INSTANCE_BUFFER.bdaInstanceBuffer = instance_data.the_shit_on_device;
+  GAME_INSTANCE_BUFFER.hostInsanceBuffer = instance_data.the_shit_on_host;
+
+  // Draw commands will go here
+  SomeShitAllocated draw_cmds;
+  vlk_allocateSomeShit(sizeof(VkDrawIndirectCommand) * MAX_DRAWS, &draw_cmds);
+  GAME_DRAW_COMMANDS.bdaDrawCommands  = draw_cmds.the_shit_on_device;
+  GAME_DRAW_COMMANDS.hostDrawCommands = draw_cmds.the_shit_on_host;
+  GAME_DRAW_COMMANDS.bdaBufferOffset = draw_cmds.offset;
 }
 
 void vlk_createGraphicsPipeline() {
@@ -488,7 +633,9 @@ void vlk_createGraphicsPipeline() {
               &(VkPipelineRenderingCreateInfoKHR){
                   .sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
                   .colorAttachmentCount    = 1,
-                  .pColorAttachmentFormats = &GAME_VK_SURFACE_FORMAT.format},
+                  .pColorAttachmentFormats = &GAME_VK_SURFACE_FORMAT.format,
+                  .depthAttachmentFormat   = VK_FORMAT_D32_SFLOAT,
+              },
           .pRasterizationState =
               &(VkPipelineRasterizationStateCreateInfo){
                   .sType =
@@ -496,6 +643,16 @@ void vlk_createGraphicsPipeline() {
                   .lineWidth = 1.,
                   .frontFace = VK_FRONT_FACE_CLOCKWISE,
               },
+          .pDepthStencilState =
+              &(VkPipelineDepthStencilStateCreateInfo){
+                  .sType =
+                      VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+                  .depthTestEnable       = VK_TRUE,
+                  .depthWriteEnable      = VK_TRUE,
+                  .stencilTestEnable     = VK_FALSE,
+                  .stencilTestEnable     = VK_FALSE,
+                  .depthCompareOp        = VK_COMPARE_OP_LESS,
+                  .depthBoundsTestEnable = VK_FALSE},
           .pColorBlendState =
               &(VkPipelineColorBlendStateCreateInfo){
                   .sType =
@@ -533,7 +690,7 @@ void vlk_createGraphicsPipeline() {
               &(VkPipelineInputAssemblyStateCreateInfo){
                   .sType =
                       VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
-                  .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP},
+                  .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST},
           .pVertexInputState =
               &(VkPipelineVertexInputStateCreateInfo){
                   .sType =
@@ -575,21 +732,35 @@ int vlk_beginDraw() {
       GAME_VK_COMMAND_BUFFER,
       &(VkDependencyInfo){
           .sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-          .imageMemoryBarrierCount = 1,
-          .pImageMemoryBarriers    = &(VkImageMemoryBarrier2){
-              .sType     = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-              .image     = GAME_SWAPCHAIN_IMAGES[GAME_CURRENT_SWAPCHAIN_IMAGE],
-              .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-              .newLayout = VK_IMAGE_LAYOUT_GENERAL,
-              .srcStageMask  = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
-              .dstStageMask  = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-              .dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-              .subresourceRange = (VkImageSubresourceRange){
-                  .aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
-                  .baseArrayLayer = 0,
-                  .baseMipLevel   = 0,
-                  .layerCount     = VK_REMAINING_ARRAY_LAYERS,
-                  .levelCount     = VK_REMAINING_MIP_LEVELS}}});
+          .imageMemoryBarrierCount = 2,
+          .pImageMemoryBarriers    = (VkImageMemoryBarrier2[]){
+              {.sType     = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+               .image     = GAME_SWAPCHAIN_IMAGES[GAME_CURRENT_SWAPCHAIN_IMAGE],
+               .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+               .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+               .srcStageMask  = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
+               .dstStageMask  = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+               .dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+               .subresourceRange =
+                   (VkImageSubresourceRange){
+                       .aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
+                       .baseArrayLayer = 0,
+                       .baseMipLevel   = 0,
+                       .layerCount     = VK_REMAINING_ARRAY_LAYERS,
+                       .levelCount     = VK_REMAINING_MIP_LEVELS}},
+              {.sType         = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+               .image         = GAME_VK_DEPTH_IMAGE,
+               .oldLayout     = VK_IMAGE_LAYOUT_UNDEFINED,
+               .newLayout     = VK_IMAGE_LAYOUT_GENERAL,
+               .srcStageMask  = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
+               .dstStageMask  = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+               .dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+               .subresourceRange = (VkImageSubresourceRange){
+                   .aspectMask     = VK_IMAGE_ASPECT_DEPTH_BIT,
+                   .baseArrayLayer = 0,
+                   .baseMipLevel   = 0,
+                   .layerCount     = VK_REMAINING_ARRAY_LAYERS,
+                   .levelCount     = VK_REMAINING_MIP_LEVELS}}}});
   vkCmdBindPipeline(GAME_VK_COMMAND_BUFFER, VK_PIPELINE_BIND_POINT_GRAPHICS,
                     GAME_VK_PIPELINE);
   vkCmdSetViewport(
@@ -607,7 +778,17 @@ int vlk_beginDraw() {
   vkCmdBeginRendering(
       GAME_VK_COMMAND_BUFFER,
       &(VkRenderingInfo){
-          .sType                = VK_STRUCTURE_TYPE_RENDERING_INFO,
+          .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+          .pDepthAttachment =
+              &(VkRenderingAttachmentInfo){
+                  .sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+                  .clearValue  = (VkClearValue){.depthStencil =
+                                                    (VkClearDepthStencilValue){
+                                                        .depth = 1.f}},
+                  .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
+                  .imageView   = GAME_VK_DEPTH_IMAGE_VIEW,
+                  .loadOp      = VK_ATTACHMENT_LOAD_OP_CLEAR,
+                  .storeOp     = VK_ATTACHMENT_STORE_OP_STORE},
           .colorAttachmentCount = 1,
           .layerCount           = 1,
           .pColorAttachments =
@@ -653,21 +834,35 @@ void vlk_endDraw() {
       GAME_VK_COMMAND_BUFFER,
       &(VkDependencyInfo){
           .sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-          .imageMemoryBarrierCount = 1,
-          .pImageMemoryBarriers    = &(VkImageMemoryBarrier2){
-              .sType     = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-              .image     = GAME_SWAPCHAIN_IMAGES[GAME_CURRENT_SWAPCHAIN_IMAGE],
-              .oldLayout = VK_IMAGE_LAYOUT_GENERAL,
-              .newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-              .srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-              .srcStageMask  = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-              .dstStageMask  = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-              .subresourceRange = (VkImageSubresourceRange){
-                  .aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
-                  .baseArrayLayer = 0,
-                  .baseMipLevel   = 0,
-                  .layerCount     = VK_REMAINING_ARRAY_LAYERS,
-                  .levelCount     = VK_REMAINING_MIP_LEVELS}}});
+          .imageMemoryBarrierCount = 2,
+          .pImageMemoryBarriers    = (VkImageMemoryBarrier2[]){
+              {.sType     = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+               .image     = GAME_SWAPCHAIN_IMAGES[GAME_CURRENT_SWAPCHAIN_IMAGE],
+               .oldLayout = VK_IMAGE_LAYOUT_GENERAL,
+               .newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+               .srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+               .srcStageMask  = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+               .dstStageMask  = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+               .subresourceRange =
+                   (VkImageSubresourceRange){
+                       .aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
+                       .baseArrayLayer = 0,
+                       .baseMipLevel   = 0,
+                       .layerCount     = VK_REMAINING_ARRAY_LAYERS,
+                       .levelCount     = VK_REMAINING_MIP_LEVELS}},
+              {.sType         = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+               .image         = GAME_VK_DEPTH_IMAGE,
+               .oldLayout     = VK_IMAGE_LAYOUT_GENERAL,
+               .newLayout     = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+               .srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+               .srcStageMask  = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+               .dstStageMask  = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+               .subresourceRange = (VkImageSubresourceRange){
+                   .aspectMask     = VK_IMAGE_ASPECT_DEPTH_BIT,
+                   .baseArrayLayer = 0,
+                   .baseMipLevel   = 0,
+                   .layerCount     = VK_REMAINING_ARRAY_LAYERS,
+                   .levelCount     = VK_REMAINING_MIP_LEVELS}}}});
   vkEndCommandBuffer(GAME_VK_COMMAND_BUFFER);
 
   vkQueueSubmit(GAME_VK_PRESENT_QUEUE, 1,
