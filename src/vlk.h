@@ -2,7 +2,7 @@
 #define VLK_HEADER
 #include "./vendor/cglm/cglm.h"
 #include "./vendor/fast_obj.h"
-#include "vendor/cglm/affine-pre.h"
+#include "engine.h"
 #include "vendor/cglm/mat4.h"
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_error.h>
@@ -12,6 +12,7 @@
 #include <SDL3/SDL_vulkan.h>
 #include <assert.h>
 #include <inttypes.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <strings.h>
 #include <sys/types.h>
@@ -32,24 +33,42 @@
 #define V3(v) {(v)[0], (v)[1], (v)[2]}
 #define M4(m)                                                                  \
   {                                                                            \
-      (m)[0][0], (m)[0][1], (m)[0][2], (m)[0][3], (m)[1][0], (m)[1][1],        \
-      (m)[1][2], (m)[1][3], (m)[2][0], (m)[2][1], (m)[2][2], (m)[2][3],        \
-      (m)[3][0], (m)[3][1], (m)[3][2], (m)[3][3],                              \
+      {(m)[0][0], (m)[0][1], (m)[0][2], (m)[0][3]},                            \
+      {(m)[1][0], (m)[1][1], (m)[1][2], (m)[1][3]},                            \
+      {(m)[2][0], (m)[2][1], (m)[2][2], (m)[2][3]},                            \
+      {(m)[3][0], (m)[3][1], (m)[3][2], (m)[3][3]},                            \
   }
+
+typedef struct Model {
+  uint32_t vert_count;
+  VkDeviceAddress device_addr;
+} Model;
 
 typedef struct SomeShitAllocated {
   void *the_shit_on_host;
   VkDeviceAddress the_shit_on_device;
-  uint32_t offset;
+  uint32_t offset_in_buffer;
 } SomeShitAllocated;
 
-typedef struct InstanceData {
+typedef struct ModelInstanceData {
+  float transform[16];
   VkDeviceAddress vertex_buffer;
-  vec3 pos;
-  mat4 rot;
-} InstanceData;
+  vec3 col;
+  vec3 scale;
+} ModelInstanceData;
 
-#define MAX_DRAWS 1024
+typedef struct ModelInstanceDataBuffer {
+  VkDeviceAddress bdaInstanceBuffer;
+  ModelInstanceData *hostInsanceBuffer;
+} ModelInstanceDataBuffer;
+
+typedef struct FxInstanceData {
+  vec3 pos;
+  float t;
+} FxInstanceData;
+
+#define MAX_DRAWS 1e6
+#define MAX_FX_DRAWS 1e6
 
 typedef struct DrawCommands {
   VkDeviceAddress bdaDrawCommands;
@@ -57,10 +76,10 @@ typedef struct DrawCommands {
   VkDeviceSize bdaBufferOffset;
 } DrawCommands;
 
-typedef struct InstanceDataBuffer {
+typedef struct FxInstanceDataBuffer {
   VkDeviceAddress bdaInstanceBuffer;
-  InstanceData *hostInsanceBuffer;
-} InstanceDataBuffer;
+  FxInstanceData *hostInsanceBuffer;
+} FxInstanceDataBuffer;
 
 // Global vulkan shit
 VkInstance GAME_VK_INSTANCE              = VK_NULL_HANDLE;
@@ -87,46 +106,36 @@ VkCommandPool GAME_VK_COMMAND_POOL     = VK_NULL_HANDLE;
 VkCommandBuffer GAME_VK_COMMAND_BUFFER = VK_NULL_HANDLE;
 
 // Graphics pipeline shit
-VkPipeline GAME_VK_PIPELINE                         = VK_NULL_HANDLE;
-VkPipelineLayout GAME_VK_PIPELINE_LAYOUT            = VK_NULL_HANDLE;
-VkDescriptorPool GAME_VK_DESCRIPTOR_POOL            = VK_NULL_HANDLE;
-VkDescriptorSet GAME_VK_DESCRIPTOR_SET              = VK_NULL_HANDLE;
-VkDescriptorSetLayout GAME_VK_DESCRIPTOR_SET_LAYOUT = VK_NULL_HANDLE;
-VkShaderModule GAME_VERT_MODULE                     = VK_NULL_HANDLE;
-VkShaderModule GAME_FRAG_MODULE                     = VK_NULL_HANDLE;
+VkPipeline GAME_VK_MODEL_PIPELINE        = VK_NULL_HANDLE;
+VkPipeline GAME_VK_FX_PIPELINE           = VK_NULL_HANDLE;
+VkPipelineLayout GAME_VK_PIPELINE_LAYOUT = VK_NULL_HANDLE;
+VkShaderModule GAME_VERT_MODULE          = VK_NULL_HANDLE;
+VkShaderModule GAME_FRAG_MODULE          = VK_NULL_HANDLE;
 VkSurfaceFormatKHR GAME_VK_SURFACE_FORMAT;
 VkSurfaceCapabilitiesKHR GAME_SURFACE_CAPABILITIES;
 VkFence GAME_PRESENT_FENCE;
 
+// Assets
+Model GAME_MODELS[512];
+uint32_t GAME_MODEL_COUNT = 0;
+
 // Render state
 uint32_t GAME_CURRENT_SWAPCHAIN_IMAGE = 0;
 mat4 GAME_VIEWPROJ;
-DrawCommands GAME_DRAW_COMMANDS;
-InstanceDataBuffer GAME_INSTANCE_BUFFER;
-size_t GAME_DRAW_COUNT;
+DrawCommands GAME_MODEL_DRAW_COMMANDS;
+DrawCommands GAME_FX_DRAW_COMMANDS;
+ModelInstanceDataBuffer GAME_MODEL_INSTANCE_BUFFER;
+FxInstanceDataBuffer GAME_FX_INSTANCE_BUFFER;
+;
 
 // Camera shit
-vec3 GAME_CAM_POS;
-mat4 GAME_CAM_ROT;
+mat4 GAME_CAM_TRANSFORM;
 mat4 GAME_PERSP_PROJ;
 
 // Arena
 VkBuffer GAME_VK_ALL_THE_DATA;
 void *GAME_VK_ALL_THE_DATA_HOST;
-size_t ALL_THE_DATA_HEAD;
-
-void addDraw(VkDeviceAddress vert_location, uint32_t vert_count, vec3 pos,
-             mat4 rot) {
-  GAME_DRAW_COMMANDS.hostDrawCommands[GAME_DRAW_COUNT] =
-      (VkDrawIndirectCommand){.vertexCount   = vert_count,
-                              .firstVertex   = 0,
-                              .instanceCount = 1,
-                              .firstInstance = 0};
-
-  GAME_INSTANCE_BUFFER.hostInsanceBuffer[GAME_DRAW_COUNT] = (InstanceData){
-      .vertex_buffer = vert_location, .pos = V3(pos), .rot = M4(rot)};
-  GAME_DRAW_COUNT++;
-}
+size_t ALL_THE_DATA_HEAD = 0;
 
 void vlk_createShaderModule(char *path, VkShaderModule *module) {
   FILE *f = fopen(path, "r");
@@ -147,7 +156,7 @@ void vlk_createShaderModule(char *path, VkShaderModule *module) {
 
 typedef struct {
   mat4 viewproj;
-  VkDeviceAddress vertex_buffer;
+  VkDeviceAddress instance_buffer;
 } PushConstant;
 
 void vlk_allocateSomeShit(size_t size, SomeShitAllocated *out_buff) {
@@ -159,7 +168,7 @@ void vlk_allocateSomeShit(size_t size, SomeShitAllocated *out_buff) {
 
   out_buff->the_shit_on_device = addr + ALL_THE_DATA_HEAD;
   out_buff->the_shit_on_host   = GAME_VK_ALL_THE_DATA_HOST + ALL_THE_DATA_HEAD;
-  out_buff->offset             = ALL_THE_DATA_HEAD;
+  out_buff->offset_in_buffer   = ALL_THE_DATA_HEAD;
   ALL_THE_DATA_HEAD += size;
 
   return;
@@ -226,19 +235,18 @@ unsigned int obj_to_indexbuffer(fastObjMesh *brush,
         // First index (of the tri) is always the first index of the face
         float *pos  = &brush->positions[brush->indices[face_start].p * 3];
         float *norm = &brush->normals[brush->indices[face_start].n * 3];
-        float *col  = debug_cols[face_n & 0b11];
+        // float *col  = debug_cols[face_n & 0b11];
+        float *col = (vec3){1., 1., 1.};
         vertex_buffer_write[out_idx++] =
             (Vertex){.pos = V3(pos), .norm = V3(norm), .col = V3(col)};
 
         // Other two points, step through
         pos  = &brush->positions[brush->indices[idx + 1].p * 3];
         norm = &brush->normals[brush->indices[idx + 1].n * 3];
-        col  = debug_cols[face_n & 0b11];
         vertex_buffer_write[out_idx++] =
             (Vertex){.pos = V3(pos), .norm = V3(norm), .col = V3(col)};
         pos  = &brush->positions[brush->indices[idx + 2].p * 3];
         norm = &brush->normals[brush->indices[idx + 2].n * 3];
-        col  = debug_cols[face_n & 0b11];
         vertex_buffer_write[out_idx++] =
             (Vertex){.pos = V3(pos), .norm = V3(norm), .col = V3(col)};
         // Index (0,1,2),(0,2,3), (0,3,4) for a 5-gon
@@ -255,6 +263,18 @@ unsigned int obj_to_indexbuffer(fastObjMesh *brush,
   }
 
   return out_index_count;
+}
+
+unsigned int load_model(char *obj_path) {
+  fastObjMesh *brush = fast_obj_read(obj_path);
+  assert(brush != 0);
+  SomeShitAllocated vertex_buffer;
+  unsigned int vertex_count = obj_to_indexbuffer(brush, &vertex_buffer);
+
+  GAME_MODELS[GAME_MODEL_COUNT] =
+      (Model){.vert_count  = vertex_count,
+              .device_addr = vertex_buffer.the_shit_on_device};
+  return GAME_MODEL_COUNT++;
 }
 
 void vlk_CreateDepthBuffer() {
@@ -340,7 +360,20 @@ void vlk_CreateDepthBuffer() {
 VkResult vlk_createSwapchain() {
   VkResult res;
   VkSwapchainKHR old = GAME_VK_SWAPCHAIN;
-  res                = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
+
+  VK_WRAP_ARR(VkSurfaceFormatKHR, formats, vkGetPhysicalDeviceSurfaceFormatsKHR,
+              GAME_VK_PHYSICAL_DEVICE, GAME_VK_SURFACE);
+  for (int i = 0; i < formats_count; i++) {
+    if (formats[i].format == VK_FORMAT_B8G8R8A8_SRGB) {
+      GAME_VK_SURFACE_FORMAT = formats[i];
+      break;
+    }
+  }
+  if (GAME_VK_SURFACE_FORMAT.format == 0) {
+    fprintf(stderr, "Cant get format");
+    exit(1);
+  }
+  res = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
       GAME_VK_PHYSICAL_DEVICE, GAME_VK_SURFACE, &GAME_SURFACE_CAPABILITIES);
   printf("Current extent %d,%d\n",
          GAME_SURFACE_CAPABILITIES.currentExtent.width,
@@ -351,10 +384,10 @@ VkResult vlk_createSwapchain() {
       GAME_VK_DEVICE,
       &(VkSwapchainCreateInfoKHR){
           .oldSwapchain     = GAME_VK_SWAPCHAIN,
-          .presentMode      = VK_PRESENT_MODE_FIFO_KHR,
+          .presentMode      = VK_PRESENT_MODE_IMMEDIATE_KHR,
           .sType            = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
           .surface          = GAME_VK_SURFACE,
-          .minImageCount    = GAME_SURFACE_CAPABILITIES.minImageCount,
+          .minImageCount    = GAME_SURFACE_CAPABILITIES.minImageCount + 1,
           .imageFormat      = GAME_VK_SURFACE_FORMAT.format,
           .imageColorSpace  = GAME_VK_SURFACE_FORMAT.colorSpace,
           .imageUsage       = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
@@ -397,17 +430,17 @@ VkResult vlk_createSwapchain() {
   }
 
   glm_perspective_lh_zo(
-      glm_rad(100),
+      glm_rad(90),
       (float)GAME_SURFACE_CAPABILITIES.currentExtent.width /
           (float)GAME_SURFACE_CAPABILITIES.currentExtent.height,
       1.f, 1000000.f, GAME_PERSP_PROJ);
+
   return VK_SUCCESS;
 }
 
 void vlk_init(SDL_Window *window) {
 
-  glm_mat4_identity(GAME_CAM_ROT);
-  glm_vec3_zero(GAME_CAM_POS);
+  glm_mat4_identity(GAME_CAM_TRANSFORM);
 
   uint32_t ext_count;
 
@@ -441,6 +474,8 @@ void vlk_init(SDL_Window *window) {
       pdevices[0],
       &(VkDeviceCreateInfo){
           .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+          .pEnabledFeatures =
+              &(VkPhysicalDeviceFeatures){.multiDrawIndirect = VK_TRUE},
           .pNext =
               &(VkPhysicalDeviceDynamicRenderingFeatures){
                   .sType =
@@ -460,16 +495,18 @@ void vlk_init(SDL_Window *window) {
                                       &(VkPhysicalDeviceScalarBlockLayoutFeatures){
                                           .sType =
                                               VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SCALAR_BLOCK_LAYOUT_FEATURES,
-                                          .scalarBlockLayout = VK_TRUE}}}},
+                                          .scalarBlockLayout = VK_TRUE,
+                                      }}}},
           .queueCreateInfoCount  = 1,
-          .enabledExtensionCount = 6,
+          .enabledExtensionCount = 7,
           .ppEnabledExtensionNames =
               (const char *[]){VK_KHR_SWAPCHAIN_EXTENSION_NAME,
                                VK_KHR_UNIFIED_IMAGE_LAYOUTS_EXTENSION_NAME,
                                VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME,
                                VK_KHR_DEPTH_STENCIL_RESOLVE_EXTENSION_NAME,
                                VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME,
-                               VK_EXT_SCALAR_BLOCK_LAYOUT_EXTENSION_NAME},
+                               VK_EXT_SCALAR_BLOCK_LAYOUT_EXTENSION_NAME,
+                               VK_KHR_SHADER_DRAW_PARAMETERS_EXTENSION_NAME},
           .pQueueCreateInfos =
               &(const VkDeviceQueueCreateInfo){
                   .sType      = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
@@ -485,7 +522,7 @@ void vlk_init(SDL_Window *window) {
                                      VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
                                      VK_BUFFER_USAGE_2_INDEX_BUFFER_BIT,
                             .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-                            .size  = 256ull * 1024 * 1024,
+                            .size  = 256ull * 1e6,
                             .sharingMode = VK_SHARING_MODE_EXCLUSIVE},
       0, &GAME_VK_ALL_THE_DATA);
   VkMemoryRequirements memreqs;
@@ -561,69 +598,50 @@ void vlk_init(SDL_Window *window) {
                         },
                         0, &GAME_PRESENT_FENCE));
 
-  // Instances will go here
-  SomeShitAllocated instance_data;
-  vlk_allocateSomeShit(sizeof(InstanceData) * MAX_DRAWS, &instance_data);
-  GAME_INSTANCE_BUFFER.bdaInstanceBuffer = instance_data.the_shit_on_device;
-  GAME_INSTANCE_BUFFER.hostInsanceBuffer = instance_data.the_shit_on_host;
-
-  // Draw commands will go here
   SomeShitAllocated draw_cmds;
+  SomeShitAllocated instance_data;
+  // Instances will go here
+  vlk_allocateSomeShit(sizeof(ModelInstanceData) * MAX_DRAWS, &instance_data);
+  GAME_MODEL_INSTANCE_BUFFER.bdaInstanceBuffer =
+      instance_data.the_shit_on_device;
+  GAME_MODEL_INSTANCE_BUFFER.hostInsanceBuffer = instance_data.the_shit_on_host;
+  // FX will go here
+  vlk_allocateSomeShit(sizeof(ModelInstanceData) * MAX_FX_DRAWS,
+                       &instance_data);
+  GAME_FX_INSTANCE_BUFFER.bdaInstanceBuffer = instance_data.the_shit_on_device;
+  GAME_FX_INSTANCE_BUFFER.hostInsanceBuffer = instance_data.the_shit_on_host;
+  // Model draw commands will go here
   vlk_allocateSomeShit(sizeof(VkDrawIndirectCommand) * MAX_DRAWS, &draw_cmds);
-  GAME_DRAW_COMMANDS.bdaDrawCommands  = draw_cmds.the_shit_on_device;
-  GAME_DRAW_COMMANDS.hostDrawCommands = draw_cmds.the_shit_on_host;
-  GAME_DRAW_COMMANDS.bdaBufferOffset = draw_cmds.offset;
+  GAME_MODEL_DRAW_COMMANDS.bdaDrawCommands  = draw_cmds.the_shit_on_device;
+  GAME_MODEL_DRAW_COMMANDS.hostDrawCommands = draw_cmds.the_shit_on_host;
+  GAME_MODEL_DRAW_COMMANDS.bdaBufferOffset  = draw_cmds.offset_in_buffer;
+  // Fx draw commands will go here
+  vlk_allocateSomeShit(sizeof(VkDrawIndirectCommand) * MAX_DRAWS, &draw_cmds);
+  GAME_FX_DRAW_COMMANDS.bdaDrawCommands  = draw_cmds.the_shit_on_device;
+  GAME_FX_DRAW_COMMANDS.hostDrawCommands = draw_cmds.the_shit_on_host;
+  GAME_FX_DRAW_COMMANDS.bdaBufferOffset  = draw_cmds.offset_in_buffer;
 }
 
-void vlk_createGraphicsPipeline() {
-
-  VK_WRAP_ARR(VkSurfaceFormatKHR, formats, vkGetPhysicalDeviceSurfaceFormatsKHR,
-              GAME_VK_PHYSICAL_DEVICE, GAME_VK_SURFACE);
-  for (int i = 0; i < formats_count; i++) {
-    if (formats[i].format == VK_FORMAT_B8G8R8A8_SRGB) {
-      GAME_VK_SURFACE_FORMAT = formats[i];
-      break;
-    }
-  }
-  if (GAME_VK_SURFACE_FORMAT.format == 0) {
-    fprintf(stderr, "Cant get format");
-    exit(1);
-  }
-  vkCreateDescriptorPool(
-      GAME_VK_DEVICE,
-      &(VkDescriptorPoolCreateInfo){
-          .sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-          .poolSizeCount = 0,
-          .maxSets       = 1},
-      0, &GAME_VK_DESCRIPTOR_POOL);
-  VK_WRAP(vkCreateDescriptorSetLayout(
-      GAME_VK_DEVICE,
-      &(VkDescriptorSetLayoutCreateInfo){
-          .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO},
-      0, &GAME_VK_DESCRIPTOR_SET_LAYOUT));
-  VK_WRAP(vkAllocateDescriptorSets(
-      GAME_VK_DEVICE,
-      &(VkDescriptorSetAllocateInfo){
-          .sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-          .descriptorSetCount = 1,
-          .pSetLayouts        = &GAME_VK_DESCRIPTOR_SET_LAYOUT,
-          .descriptorPool     = GAME_VK_DESCRIPTOR_POOL},
-      &GAME_VK_DESCRIPTOR_SET));
+void vlk_createGraphicsPipeline(char *vert_shader, char *frag_shader,
+                                VkPipeline *p) {
   vkCreatePipelineLayout(
       GAME_VK_DEVICE,
       &(VkPipelineLayoutCreateInfo){
           .sType          = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-          .setLayoutCount = 1,
+          .setLayoutCount = 0,
           .pushConstantRangeCount = 1,
           .pPushConstantRanges =
               &(VkPushConstantRange){.offset     = 0,
                                      .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
                                      .size       = sizeof(PushConstant)},
-          .pSetLayouts = &GAME_VK_DESCRIPTOR_SET_LAYOUT},
+      },
       0, &GAME_VK_PIPELINE_LAYOUT);
 
-  vlk_createShaderModule("./bin/shaders/model_vertex.spv", &GAME_VERT_MODULE);
-  vlk_createShaderModule("./bin/shaders/model_fragment.spv", &GAME_FRAG_MODULE);
+  VkShaderModule vert_module;
+  VkShaderModule frag_module;
+
+  vlk_createShaderModule(vert_shader, &vert_module);
+  vlk_createShaderModule(frag_shader, &frag_module);
 
   vkCreateGraphicsPipelines(
       GAME_VK_DEVICE, VK_NULL_HANDLE, 1,
@@ -642,7 +660,7 @@ void vlk_createGraphicsPipeline() {
                       VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
                   .lineWidth = 1.,
                   .frontFace = VK_FRONT_FACE_CLOCKWISE,
-              },
+                  .cullMode  = VK_CULL_MODE_BACK_BIT},
           .pDepthStencilState =
               &(VkPipelineDepthStencilStateCreateInfo){
                   .sType =
@@ -700,14 +718,23 @@ void vlk_createGraphicsPipeline() {
                   {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
                    .stage = VK_SHADER_STAGE_VERTEX_BIT,
                    .pName = "main",
-                   .module = GAME_VERT_MODULE},
+                   .module = vert_module},
                   {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
                    .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
                    .pName = "main",
-                   .module = GAME_FRAG_MODULE}
+                   .module = frag_module}
 
               }},
-      0, &GAME_VK_PIPELINE);
+      0, p);
+}
+
+void vlk_createPipelines() {
+  vlk_createGraphicsPipeline("./bin/shaders/model_vertex.spv",
+                             "./bin/shaders/model_fragment.spv",
+                             &GAME_VK_MODEL_PIPELINE);
+  vlk_createGraphicsPipeline("./bin/shaders/fx_vertex.spv",
+                             "./bin/shaders/fx_fragment.spv",
+                             &GAME_VK_FX_PIPELINE);
 }
 
 int vlk_beginDraw() {
@@ -761,8 +788,6 @@ int vlk_beginDraw() {
                    .baseMipLevel   = 0,
                    .layerCount     = VK_REMAINING_ARRAY_LAYERS,
                    .levelCount     = VK_REMAINING_MIP_LEVELS}}}});
-  vkCmdBindPipeline(GAME_VK_COMMAND_BUFFER, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                    GAME_VK_PIPELINE);
   vkCmdSetViewport(
       GAME_VK_COMMAND_BUFFER, 0, 1,
 
@@ -809,25 +834,108 @@ int vlk_beginDraw() {
 
   // Camera
   mat4 view;
-  glm_mat4_identity(view);
-
-  // Rotation
-  mat4 inv;
-  glm_mat4_inv(GAME_CAM_ROT, inv);
-  glm_mat4_mul(inv, view, view);
-
-  // Translation
-  glm_translate(view, (vec3){
-                          -GAME_CAM_POS[0],
-                          -GAME_CAM_POS[1],
-                          -GAME_CAM_POS[2],
-                      });
+  glm_mat4_inv(GAME_CAM_TRANSFORM, view);
 
   // Viewproj
   glm_mat4_mul(GAME_PERSP_PROJ, view, GAME_VIEWPROJ);
 
   return 0;
 }
+
+void vlk_queueFxDrawCommands(uint32_t fx_count, vec3 *fx_loc, float *fx_t) {
+  for (uint32_t i = 0; i < fx_count; i++) {
+    glm_vec3_copy(fx_loc[i], GAME_FX_INSTANCE_BUFFER.hostInsanceBuffer[i].pos);
+    GAME_FX_INSTANCE_BUFFER.hostInsanceBuffer[i].t = fx_t[i];
+  }
+  // Add a draw command for this model; this may have an instance count of 0.
+  GAME_FX_DRAW_COMMANDS.hostDrawCommands[0] =
+      (VkDrawIndirectCommand){.firstInstance = 0,
+                              .firstVertex   = 0,
+                              .instanceCount = fx_count,
+                              .vertexCount   = 6};
+}
+
+void vlk_queueModelDrawCommands(uint32_t entity_count, mat4 *entity_transforms,
+                                vec3 *col, vec3 *scale,
+                                int32_t *entity_models) {
+
+  // Start with zero instances
+  uint32_t instance_count = 0;
+
+  // For each model
+  for (uint32_t model_index = 0; model_index < GAME_MODEL_COUNT;
+       model_index++) {
+    uint32_t first_instance = instance_count;
+
+    // For each entity
+    for (uint32_t i = 0; i < entity_count; i++) {
+
+      // If the entity is the current model
+      if (entity_models[i] == model_index) {
+        // Push it to the instance buffer
+        GAME_MODEL_INSTANCE_BUFFER.hostInsanceBuffer[instance_count]
+            .vertex_buffer = GAME_MODELS[model_index].device_addr;
+        GAME_MODEL_INSTANCE_BUFFER.hostInsanceBuffer[instance_count].col[0] =
+            col[i][0];
+        GAME_MODEL_INSTANCE_BUFFER.hostInsanceBuffer[instance_count].col[1] =
+            col[i][1];
+        GAME_MODEL_INSTANCE_BUFFER.hostInsanceBuffer[instance_count].col[2] =
+            col[i][2];
+        GAME_MODEL_INSTANCE_BUFFER.hostInsanceBuffer[instance_count].scale[0] =
+            scale[i][0];
+        GAME_MODEL_INSTANCE_BUFFER.hostInsanceBuffer[instance_count].scale[1] =
+            scale[i][1];
+        GAME_MODEL_INSTANCE_BUFFER.hostInsanceBuffer[instance_count].scale[2] =
+            scale[i][2];
+        glm_mat4_ucopy(
+            (vec4 *)entity_transforms[i],
+            (vec4 *)GAME_MODEL_INSTANCE_BUFFER.hostInsanceBuffer[instance_count]
+                .transform);
+
+        // Increment instance count
+        instance_count++;
+      }
+    }
+
+    // Add a draw command for this model; this may have an instance count of 0.
+    GAME_MODEL_DRAW_COMMANDS.hostDrawCommands[model_index] =
+        (VkDrawIndirectCommand){
+            .firstInstance = first_instance,
+            .firstVertex   = 0,
+            .instanceCount = instance_count - first_instance,
+            .vertexCount   = GAME_MODELS[model_index].vert_count};
+  }
+}
+
+void vlk_issueDraws() {
+
+  // Models
+  vkCmdBindPipeline(GAME_VK_COMMAND_BUFFER, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                    GAME_VK_MODEL_PIPELINE);
+  PushConstant pc = {.instance_buffer =
+                         GAME_MODEL_INSTANCE_BUFFER.bdaInstanceBuffer,
+                     .viewproj = M4(GAME_VIEWPROJ)};
+  memcpy(pc.viewproj, GAME_VIEWPROJ, sizeof(GAME_VIEWPROJ));
+  vkCmdPushConstants(GAME_VK_COMMAND_BUFFER, GAME_VK_PIPELINE_LAYOUT,
+                     VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(PushConstant), &pc);
+  vkCmdDrawIndirect(GAME_VK_COMMAND_BUFFER, GAME_VK_ALL_THE_DATA,
+                    GAME_MODEL_DRAW_COMMANDS.bdaBufferOffset, GAME_MODEL_COUNT,
+                    sizeof(VkDrawIndirectCommand));
+
+  // FX
+  vkCmdBindPipeline(GAME_VK_COMMAND_BUFFER, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                    GAME_VK_MODEL_PIPELINE);
+  PushConstant pc1 = {.instance_buffer =
+                          GAME_FX_INSTANCE_BUFFER.bdaInstanceBuffer,
+                      .viewproj = M4(GAME_VIEWPROJ)};
+  memcpy(pc.viewproj, GAME_VIEWPROJ, sizeof(GAME_VIEWPROJ));
+  vkCmdPushConstants(GAME_VK_COMMAND_BUFFER, GAME_VK_PIPELINE_LAYOUT,
+                     VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(PushConstant), &pc1);
+  vkCmdDrawIndirect(GAME_VK_COMMAND_BUFFER, GAME_VK_ALL_THE_DATA,
+                    GAME_FX_DRAW_COMMANDS.bdaBufferOffset, 1,
+                    sizeof(VkDrawIndirectCommand));
+}
+
 void vlk_endDraw() {
   vkCmdEndRendering(GAME_VK_COMMAND_BUFFER);
   vkCmdPipelineBarrier2(
@@ -880,7 +988,6 @@ void vlk_endDraw() {
                           .pImageIndices =
                               (const uint32_t[]){GAME_CURRENT_SWAPCHAIN_IMAGE},
                           .pSwapchains = &GAME_VK_SWAPCHAIN});
-  vkResetFences(GAME_VK_DEVICE, 1, &GAME_PRESENT_FENCE);
   if (res == VK_SUBOPTIMAL_KHR) {
     vlk_createSwapchain();
   }
