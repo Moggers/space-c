@@ -139,7 +139,7 @@ void *GAME_VK_ALL_THE_DATA_HOST;
 size_t ALL_THE_DATA_HEAD = 0;
 
 void vlk_createShaderModule(char *path, VkShaderModule *module) {
-  FILE *f = fopen(path, "r");
+  FILE *f = fopen(path, "rb");
   assert(f != 0);
   fseek(f, 0, SEEK_END);
   long length = ftell(f);
@@ -646,7 +646,7 @@ void vlk_createGraphicsPipeline(char *vert_shader, char *frag_shader,
   vlk_createShaderModule(vert_shader, &vert_module);
   vlk_createShaderModule(frag_shader, &frag_module);
 
-  vkCreateGraphicsPipelines(
+  VK_WRAP(vkCreateGraphicsPipelines(
       GAME_VK_DEVICE, VK_NULL_HANDLE, 1,
       &(VkGraphicsPipelineCreateInfo){
           .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
@@ -735,7 +735,7 @@ void vlk_createGraphicsPipeline(char *vert_shader, char *frag_shader,
                    .module = frag_module}
 
               }},
-      0, p);
+      0, p));
 }
 
 void vlk_createPipelines() {
