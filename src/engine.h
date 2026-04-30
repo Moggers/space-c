@@ -6,7 +6,7 @@
 #include <math.h>
 
 #define MAX_ENTITIES 2000000
-#define MAX_FX 2000000
+#define MAX_FX 1000
 
 typedef struct Gun {
   float reload_time;
@@ -32,6 +32,8 @@ vec3 ENTITY_CURRENT_VEC_THRUST[MAX_ENTITIES];
 uint32_t PLAYER_CONTROLLED_ENTITY;
 vec3 ENTITY_SCALE[MAX_ENTITIES];
 Gun ENTITY_GUN[MAX_ENTITIES];
+uint32_t ENTITY_COLLIDER_GROUP[MAX_ENTITIES];
+char *ENTITY_NAME[MAX_ENTITIES];
 
 // FIX STUFF
 vec3 FX_LOCATION[MAX_FX];
@@ -39,7 +41,8 @@ float FX_T[MAX_FX];
 uint32_t FX_COUNT = 0;
 
 uint32_t make_entity(mat4 transform, uint32_t faction, vec3 col,
-                     float vec_thrust, float thrust, uint32_t model_id) {
+                     float vec_thrust, float thrust, uint32_t model_id,
+                     char *name) {
   glm_mat4_identity(ENTITY_TRANSFORM[ENTITY_COUNT]);
   glm_mat4_copy(transform, ENTITY_TRANSFORM[ENTITY_COUNT]);
   ENTITY_MODEL[ENTITY_COUNT]                 = model_id;
@@ -55,6 +58,8 @@ uint32_t make_entity(mat4 transform, uint32_t faction, vec3 col,
   ENTITY_SCALE[ENTITY_COUNT][0]              = 1.;
   ENTITY_SCALE[ENTITY_COUNT][1]              = 1.;
   ENTITY_SCALE[ENTITY_COUNT][2]              = 1.;
+  ENTITY_COLLIDER_GROUP[ENTITY_COUNT]        = 1;
+  ENTITY_NAME[ENTITY_COUNT]                  = name;
   glm_vec3_copy(col, ENTITY_COLORS[ENTITY_COUNT]);
   glm_vec3_zero(ENTITY_INERTIA[ENTITY_COUNT]);
   return ENTITY_COUNT++;
@@ -110,24 +115,28 @@ void play_fx(float delta_time) {
 
 void spawn_fx(vec3 loc) {
   FX_T[FX_COUNT] = 0.;
-  glm_vec3_copy(FX_LOCATION[FX_COUNT], loc);
+  glm_vec3_copy(loc, FX_LOCATION[FX_COUNT]);
   FX_COUNT++;
+  FX_COUNT = FX_COUNT % MAX_FX;
 }
 
 void do_collisions() {
   for (uint32_t entity = 0; entity < ENTITY_COUNT; entity++) {
     for (uint32_t collider = 0; collider < ENTITY_COUNT; collider++) {
-      if (collider == entity) {
+      if ((collider == entity) | !ENTITY_COLLIDER_GROUP[collider] |
+          !ENTITY_COLLIDER_GROUP[entity] |
+          (ENTITY_COLLIDER_GROUP[entity] == ENTITY_COLLIDER_GROUP[collider])) {
         continue;
       }
-      if (((ENTITY_TRANSFORM[entity][3][0] - ENTITY_TRANSFORM[collider][3][0]) +
-           (ENTITY_TRANSFORM[entity][1][0] - ENTITY_TRANSFORM[collider][3][1]) +
-           (ENTITY_TRANSFORM[entity][2][0] -
-            ENTITY_TRANSFORM[collider][3][2])) < 5 * 5) {
-        if (FX_COUNT < 10) {
-          printf("Spawning fx\n");
-          // spawn_fx(ENTITY_TRANSFORM[entity][3]);
-        }
+      if ((fabs(ENTITY_TRANSFORM[entity][3][0] -
+                ENTITY_TRANSFORM[collider][3][0]) +
+           fabs(ENTITY_TRANSFORM[entity][3][1] -
+                ENTITY_TRANSFORM[collider][3][1]) +
+           fabs(ENTITY_TRANSFORM[entity][3][2] -
+                ENTITY_TRANSFORM[collider][3][2])) < 5) {
+        printf("%s colliding with %s\n", ENTITY_NAME[entity],
+               ENTITY_NAME[collider]);
+        spawn_fx(ENTITY_TRANSFORM[entity][3]);
       }
     }
   }
@@ -142,16 +151,17 @@ void fire_guns(float delta_time) {
         ENTITY_GUN[ship].reload = ENTITY_GUN[ship].reload_time;
         uint32_t bullet =
             make_entity(ENTITY_TRANSFORM[ship], -1, (vec3){1., 0., 0.}, 0, 0,
-                        ENTITY_GUN[ship].model);
+                        ENTITY_GUN[ship].model, "Bullet");
         vec3 inertia = {0, 0, ENTITY_GUN[ship].speed};
         glm_mat4_mulv3(ENTITY_TRANSFORM[ship], inertia, 0., inertia);
         glm_vec3_copy(inertia, ENTITY_INERTIA[bullet]);
         glm_translate(ENTITY_TRANSFORM[bullet],
                       (vec3){0., 0., ENTITY_GUN[ship].speed * 0.01});
-        ENTITY_MAX_VEL[bullet]  = 1000.;
-        ENTITY_SCALE[bullet][0] = 0.1;
-        ENTITY_SCALE[bullet][1] = 0.1;
-        ENTITY_SCALE[bullet][2] = ENTITY_GUN[ship].speed * 0.005;
+        ENTITY_MAX_VEL[bullet]        = 1000.;
+        ENTITY_SCALE[bullet][0]       = 0.1;
+        ENTITY_SCALE[bullet][1]       = 0.1;
+        ENTITY_SCALE[bullet][2]       = ENTITY_GUN[ship].speed * 0.005;
+        ENTITY_COLLIDER_GROUP[bullet] = 2;
       }
     }
   }

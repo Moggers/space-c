@@ -620,10 +620,7 @@ void vlk_init(SDL_Window *window) {
   GAME_FX_DRAW_COMMANDS.bdaDrawCommands  = draw_cmds.the_shit_on_device;
   GAME_FX_DRAW_COMMANDS.hostDrawCommands = draw_cmds.the_shit_on_host;
   GAME_FX_DRAW_COMMANDS.bdaBufferOffset  = draw_cmds.offset_in_buffer;
-}
 
-void vlk_createGraphicsPipeline(char *vert_shader, char *frag_shader,
-                                VkPipeline *p) {
   vkCreatePipelineLayout(
       GAME_VK_DEVICE,
       &(VkPipelineLayoutCreateInfo){
@@ -636,6 +633,10 @@ void vlk_createGraphicsPipeline(char *vert_shader, char *frag_shader,
                                      .size       = sizeof(PushConstant)},
       },
       0, &GAME_VK_PIPELINE_LAYOUT);
+}
+
+void vlk_createGraphicsPipeline(char *vert_shader, char *frag_shader,
+                                VkPipeline *p) {
 
   VkShaderModule vert_module;
   VkShaderModule frag_module;
@@ -678,11 +679,18 @@ void vlk_createGraphicsPipeline(char *vert_shader, char *frag_shader,
                   .attachmentCount = 1,
                   .pAttachments =
                       &(VkPipelineColorBlendAttachmentState){
-                          .colorWriteMask = VK_COLOR_COMPONENT_R_BIT |
-                                            VK_COLOR_COMPONENT_G_BIT |
-                                            VK_COLOR_COMPONENT_B_BIT |
-                                            VK_COLOR_COMPONENT_A_BIT}},
-
+                          .blendEnable         = VK_TRUE,
+                          .srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
+                          .dstColorBlendFactor =
+                              VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+                          .colorBlendOp        = VK_BLEND_OP_ADD,
+                          .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
+                          .dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO,
+                          .alphaBlendOp        = VK_BLEND_OP_ADD,
+                          .colorWriteMask      = VK_COLOR_COMPONENT_R_BIT |
+                                                 VK_COLOR_COMPONENT_G_BIT |
+                                                 VK_COLOR_COMPONENT_B_BIT |
+                                                 VK_COLOR_COMPONENT_A_BIT}},
           .pDynamicState =
               &(VkPipelineDynamicStateCreateInfo){
                   .sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
@@ -909,13 +917,13 @@ void vlk_queueModelDrawCommands(uint32_t entity_count, mat4 *entity_transforms,
 
 void vlk_issueDraws() {
 
+  // Cam matrix
+  PushConstant pc = {.viewproj = M4(GAME_VIEWPROJ)};
+
   // Models
+  pc.instance_buffer = GAME_MODEL_INSTANCE_BUFFER.bdaInstanceBuffer;
   vkCmdBindPipeline(GAME_VK_COMMAND_BUFFER, VK_PIPELINE_BIND_POINT_GRAPHICS,
                     GAME_VK_MODEL_PIPELINE);
-  PushConstant pc = {.instance_buffer =
-                         GAME_MODEL_INSTANCE_BUFFER.bdaInstanceBuffer,
-                     .viewproj = M4(GAME_VIEWPROJ)};
-  memcpy(pc.viewproj, GAME_VIEWPROJ, sizeof(GAME_VIEWPROJ));
   vkCmdPushConstants(GAME_VK_COMMAND_BUFFER, GAME_VK_PIPELINE_LAYOUT,
                      VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(PushConstant), &pc);
   vkCmdDrawIndirect(GAME_VK_COMMAND_BUFFER, GAME_VK_ALL_THE_DATA,
@@ -924,13 +932,10 @@ void vlk_issueDraws() {
 
   // FX
   vkCmdBindPipeline(GAME_VK_COMMAND_BUFFER, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                    GAME_VK_MODEL_PIPELINE);
-  PushConstant pc1 = {.instance_buffer =
-                          GAME_FX_INSTANCE_BUFFER.bdaInstanceBuffer,
-                      .viewproj = M4(GAME_VIEWPROJ)};
-  memcpy(pc.viewproj, GAME_VIEWPROJ, sizeof(GAME_VIEWPROJ));
+                    GAME_VK_FX_PIPELINE);
+  pc.instance_buffer = GAME_FX_INSTANCE_BUFFER.bdaInstanceBuffer;
   vkCmdPushConstants(GAME_VK_COMMAND_BUFFER, GAME_VK_PIPELINE_LAYOUT,
-                     VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(PushConstant), &pc1);
+                     VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(PushConstant), &pc);
   vkCmdDrawIndirect(GAME_VK_COMMAND_BUFFER, GAME_VK_ALL_THE_DATA,
                     GAME_FX_DRAW_COMMANDS.bdaBufferOffset, 1,
                     sizeof(VkDrawIndirectCommand));

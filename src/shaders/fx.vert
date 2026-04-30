@@ -16,9 +16,21 @@ layout(push_constant) uniform Push {
   InstanceBuffer instance_buffer;
 } pc;
 
+vec3 verts[6] = vec3[6](
+    vec3(-1, -1, 0),
+    vec3(1, -1, 0),
+    vec3(1, 1, 0),
+    vec3(1, 1, 0),
+    vec3(-1, 1, 0),
+    vec3(-1, -1, 0)
+  );
+
 layout(location = 0) out vec3 fragColor;
+layout(location = 1) out float t;
 
 void main() {
-  gl_Position = vec4(1., 1., 1., 1.);
-  fragColor = vec3(1., 1., 1.);
+  InstanceData instance = pc.instance_buffer.instances[gl_InstanceIndex];
+  gl_Position = (pc.camera * (vec4(instance.pos, 1) + vec4(verts[gl_VertexIndex] * vec3(5, 5, 5), 1))) * vec4(1., -1., 1., 1.);
+  fragColor = vec3(1., 1., 1);
+  t = 1. - (instance.t / 10);
 }

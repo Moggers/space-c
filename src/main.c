@@ -38,16 +38,15 @@ int main(int argc, char *argv[]) {
   mat4 spawn_location;
   glm_mat4_identity(spawn_location);
   uint32_t station_a =
-      make_entity(spawn_location, 1, (vec3){0., 1., 0.}, -1, -1, station_model);
+      make_entity(spawn_location, 1, (vec3){0., 1., 0.}, -1, -1, station_model, "Statio A");
+  ENTITY_COLLIDER_GROUP[station_a] = 0;
   uint32_t player_ship =
-      make_entity(spawn_location, 1, (vec3){0., 1., 0.}, 1, 100, ship_model);
+      make_entity(spawn_location, 1, (vec3){0., 1., 0.}, 1, 100, ship_model, "Player Ship");
   give_gun(player_ship, 1000, 0.2, ship_model);
   glm_translate(spawn_location, (vec3){1000., 0., 0.});
   uint32_t station_b =
-      make_entity(spawn_location, 2, (vec3){0., 0., 1.}, -1, -1, station_model);
-  uint32_t ship_b =
-      make_entity(spawn_location, 2, (vec3){0., 0., 1.}, 1, 100, ship_model);
-  give_gun(ship_b, 1000, 0.2, ship_model);
+      make_entity(spawn_location, 2, (vec3){0., 0., 1.}, -1, -1, station_model, "Station B");
+  ENTITY_COLLIDER_GROUP[station_b] = 0;
   PLAYER_CONTROLLED_ENTITY = player_ship;
   float time;
   float time_since_last_spawn = 0;
@@ -113,7 +112,7 @@ int main(int argc, char *argv[]) {
       glm_translate(spawn_location, offset);
       uint32_t new_ship =
           make_entity(spawn_location, ENTITY_FACTION[station],
-                      ENTITY_COLORS[station], 1, 100, ship_model);
+                      ENTITY_COLORS[station], 1, 100, ship_model, "AI Ship");
       give_gun(new_ship, 1000, 0.2, ship_model);
       time_since_last_spawn = 0;
     }
@@ -137,6 +136,9 @@ int main(int argc, char *argv[]) {
 
     // Guns
     fire_guns(delta_t_f32);
+
+    // FX
+    play_fx(delta_t_f32);
 
     // GRAPHICS
     vlk_queueModelDrawCommands(ENTITY_COUNT, ENTITY_TRANSFORM, ENTITY_COLORS,
