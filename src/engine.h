@@ -1,5 +1,8 @@
 #ifndef GAME_ENGINE
 #define GAME_ENGINE
+#include "vendor/cglm/box.h"
+#define BVH_IMPLEMENTATION
+#include "./bvh.h"
 #include "vendor/cglm/cglm.h"
 #include "vendor/cglm/mat4.h"
 #include "vendor/cglm/vec3.h"
@@ -34,10 +37,17 @@ vec3 ENTITY_SCALE[MAX_ENTITIES];
 Gun ENTITY_GUN[MAX_ENTITIES];
 uint32_t ENTITY_COLLIDER_GROUP[MAX_ENTITIES];
 char *ENTITY_NAME[MAX_ENTITIES];
+uint32_t ENTITY_DEAD[MAX_ENTITIES];
 
-// FIX STUFF
+// COLLECTIONS
+bvh_t ENTITY_BVH = {0};
+uint32_t AABB_IDS[MAX_ENTITIES];
+uint32_t BVH_COUNT;
+
+// FX STUFF
 vec3 FX_LOCATION[MAX_FX];
 float FX_T[MAX_FX];
+float FX_MAX_T[MAX_FX];
 uint32_t FX_COUNT = 0;
 
 uint32_t make_entity(mat4 transform, uint32_t faction, vec3 col,
@@ -60,6 +70,7 @@ uint32_t make_entity(mat4 transform, uint32_t faction, vec3 col,
   ENTITY_SCALE[ENTITY_COUNT][2]              = 1.;
   ENTITY_COLLIDER_GROUP[ENTITY_COUNT]        = 1;
   ENTITY_NAME[ENTITY_COUNT]                  = name;
+  ENTITY_DEAD[ENTITY_COUNT]                  = 0;
   glm_vec3_copy(col, ENTITY_COLORS[ENTITY_COUNT]);
   glm_vec3_zero(ENTITY_INERTIA[ENTITY_COUNT]);
   return ENTITY_COUNT++;
@@ -71,9 +82,10 @@ void ai_select_targets() {
       float distance = -1;
       for (uint32_t potential_target = 0; potential_target < ENTITY_COUNT;
            potential_target++) {
-        if (ENTITY_FACTION[potential_target] > -1 &&
-            ENTITY_FACTION[ship] != ENTITY_FACTION[potential_target] &&
-            ENTITY_MODEL[potential_target] == 0) {
+        if ((ENTITY_FACTION[potential_target] > -1) &
+            !ENTITY_DEAD[potential_target] &
+            (ENTITY_FACTION[ship] != ENTITY_FACTION[potential_target]) &
+            (ENTITY_MODEL[potential_target] == 0)) {
           float new_dist = glm_vec3_distance(
               ENTITY_TRANSFORM[ship][3], ENTITY_TRANSFORM[potential_target][3]);
           if (distance == -1 || (new_dist < distance)) {
@@ -82,13 +94,53 @@ void ai_select_targets() {
           }
         }
       }
+    } else {
+      if (ENTITY_DEAD[ENTITY_TARGETS[ship]]) {
+        ENTITY_TARGETS[ship] = -1;
+      }
     }
   }
 }
 
+void build_entity_bvh() {
+  uint32_t collider_count = 0;
+  for (uint32_t i = 0; i < ENTITY_COUNT; i++) {
+    if ((ENTITY_COLLIDER_GROUP[i] != 0) & !ENTITY_DEAD[i]) {
+      collider_count++;
+    }
+  }
+  bvh_aabb prims[collider_count];
+  uint32_t collider_id = 0;
+  for (uint32_t i = 0; i < ENTITY_COUNT; i++) {
+    if ((ENTITY_COLLIDER_GROUP[i] != 0) & !ENTITY_DEAD[i]) {
+      prims[collider_id].min[0] = ENTITY_TRANSFORM[i][3][0] - 2;
+      prims[collider_id].min[1] = ENTITY_TRANSFORM[i][3][1] - 2;
+      prims[collider_id].min[2] = ENTITY_TRANSFORM[i][3][2] - 2;
+      prims[collider_id].max[0] = ENTITY_TRANSFORM[i][3][0] + 2;
+      prims[collider_id].max[1] = ENTITY_TRANSFORM[i][3][1] + 2;
+      prims[collider_id].max[2] = ENTITY_TRANSFORM[i][3][2] + 2;
+      AABB_IDS[collider_id]     = i;
+
+      collider_id++;
+    }
+  }
+
+  if (collider_count == BVH_COUNT) {
+    bvh_refit(&ENTITY_BVH, prims);
+  } else {
+    bvh_build(&ENTITY_BVH, prims, collider_count, 0);
+  }
+  BVH_COUNT = collider_count;
+}
+
 void ai_shoot() {
   for (uint32_t ship = 0; ship < ENTITY_COUNT; ship++) {
-    if (ENTITY_GUN[ship].reload_time != 0 && ship != PLAYER_CONTROLLED_ENTITY) {
+    if (ENTITY_DEAD[ship]) {
+      ENTITY_GUN[ship].active = false;
+      continue;
+    }
+    if ((ENTITY_GUN[ship].reload_time != 0) &
+        (ship != PLAYER_CONTROLLED_ENTITY) & (ENTITY_TARGETS[ship] != -1)) {
       mat4 inv;
       glm_mat4_inv(ENTITY_TRANSFORM[ship], inv);
       vec3 reltarg;
@@ -109,36 +161,45 @@ void give_gun(uint32_t ship, float speed, float reload_time, uint32_t model) {
 
 void play_fx(float delta_time) {
   for (uint32_t t = 0; t < FX_COUNT; t++) {
-    FX_T[t] += delta_time;
+    if (FX_T[t] < FX_MAX_T[t]) {
+      FX_T[t] += delta_time;
+    }
   }
 }
 
-void spawn_fx(vec3 loc) {
-  FX_T[FX_COUNT] = 0.;
+void spawn_fx(vec3 loc, float duration) {
+  FX_T[FX_COUNT]     = 0.;
+  FX_MAX_T[FX_COUNT] = duration;
   glm_vec3_copy(loc, FX_LOCATION[FX_COUNT]);
   FX_COUNT++;
   FX_COUNT = FX_COUNT % MAX_FX;
 }
 
+int handle_collision(uint32_t prim_index, void *user) {
+  uint32_t *checking_entity = (uint32_t *)user;
+  uint32_t found_entity     = AABB_IDS[prim_index];
+  if (*checking_entity != found_entity) {
+    spawn_fx(ENTITY_TRANSFORM[found_entity][3], 1);
+    ENTITY_COLORS[found_entity][0] = 0.5;
+    ENTITY_COLORS[found_entity][1] = 0.5;
+    ENTITY_COLORS[found_entity][2] = 0.5;
+    ENTITY_DEAD[found_entity]      = 1;
+  }
+  return 1;
+}
+
 void do_collisions() {
   for (uint32_t entity = 0; entity < ENTITY_COUNT; entity++) {
-    for (uint32_t collider = 0; collider < ENTITY_COUNT; collider++) {
-      if ((collider == entity) | !ENTITY_COLLIDER_GROUP[collider] |
-          !ENTITY_COLLIDER_GROUP[entity] |
-          (ENTITY_COLLIDER_GROUP[entity] == ENTITY_COLLIDER_GROUP[collider])) {
-        continue;
-      }
-      if ((fabs(ENTITY_TRANSFORM[entity][3][0] -
-                ENTITY_TRANSFORM[collider][3][0]) +
-           fabs(ENTITY_TRANSFORM[entity][3][1] -
-                ENTITY_TRANSFORM[collider][3][1]) +
-           fabs(ENTITY_TRANSFORM[entity][3][2] -
-                ENTITY_TRANSFORM[collider][3][2])) < 5) {
-        printf("%s colliding with %s\n", ENTITY_NAME[entity],
-               ENTITY_NAME[collider]);
-        spawn_fx(ENTITY_TRANSFORM[entity][3]);
-      }
-    }
+    bvh_aabb_query(&ENTITY_BVH,
+                   &(bvh_aabb){
+                       .min = {ENTITY_TRANSFORM[entity][3][0],
+                               ENTITY_TRANSFORM[entity][3][1],
+                               ENTITY_TRANSFORM[entity][3][2]},
+                       .max = {ENTITY_TRANSFORM[entity][3][0],
+                               ENTITY_TRANSFORM[entity][3][1],
+                               ENTITY_TRANSFORM[entity][3][2]},
+                   },
+                   handle_collision, &entity);
   }
 }
 
@@ -175,6 +236,12 @@ void ai_thrusters() {
     if (ENTITY_VEC_THRUST[ship] == -1 || ENTITY_TARGETS[ship] == -1) {
       continue;
     }
+    if (ENTITY_DEAD[ship]) {
+      ENTITY_CURRENT_VEC_THRUST[ship][0] = 0.;
+      ENTITY_CURRENT_VEC_THRUST[ship][1] = 0.;
+      ENTITY_CURRENT_VEC_THRUST[ship][2] = 0.;
+      continue;
+    }
     uint32_t target = ENTITY_TARGETS[ship];
     // Turning towards target
     vec3 targ_loc_transformed;
@@ -195,7 +262,7 @@ void ai_thrusters() {
 
 void apply_vec_thrusters(float delta_time) {
   for (uint32_t ship = 0; ship < ENTITY_COUNT; ship++) {
-    if (ENTITY_VEC_THRUST[ship] == -1) {
+    if ((ENTITY_VEC_THRUST[ship] == -1) | ENTITY_DEAD[ship]) {
       continue;
     }
     float thr   = ENTITY_VEC_THRUST[ship];
@@ -216,7 +283,8 @@ void apply_vec_thrusters(float delta_time) {
 
 void apply_thrusters(float delta_time) {
   for (uint32_t ship = 0; ship < ENTITY_COUNT; ship++) {
-    if (ENTITY_THRUST_POWER[ship] == -1 || ENTITY_TARGETS[ship] == -1) {
+    if (ENTITY_DEAD[ship] | (ENTITY_THRUST_POWER[ship] == -1) |
+        (ENTITY_TARGETS[ship] == -1)) {
       continue;
     }
 

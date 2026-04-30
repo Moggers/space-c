@@ -37,17 +37,19 @@ int main(int argc, char *argv[]) {
   uint32_t station_model = load_model("./bin/assets/station.obj");
   mat4 spawn_location;
   glm_mat4_identity(spawn_location);
-  uint32_t station_a =
-      make_entity(spawn_location, 1, (vec3){0., 1., 0.}, -1, -1, station_model, "Statio A");
+  uint32_t station_a = make_entity(spawn_location, 1, (vec3){0., 1., 0.}, -1,
+                                   -1, station_model, "Statio A");
   ENTITY_COLLIDER_GROUP[station_a] = 0;
-  uint32_t player_ship =
-      make_entity(spawn_location, 1, (vec3){0., 1., 0.}, 1, 100, ship_model, "Player Ship");
+  spawn_location[3][0] += 10;
+  uint32_t player_ship = make_entity(spawn_location, 1, (vec3){0., 1., 0.}, 1,
+                                     100, ship_model, "Player Ship");
+  spawn_location[3][0] -= 10;
   give_gun(player_ship, 1000, 0.2, ship_model);
   glm_translate(spawn_location, (vec3){1000., 0., 0.});
-  uint32_t station_b =
-      make_entity(spawn_location, 2, (vec3){0., 0., 1.}, -1, -1, station_model, "Station B");
+  uint32_t station_b = make_entity(spawn_location, 2, (vec3){0., 0., 1.}, -1,
+                                   -1, station_model, "Station B");
   ENTITY_COLLIDER_GROUP[station_b] = 0;
-  PLAYER_CONTROLLED_ENTITY = player_ship;
+  PLAYER_CONTROLLED_ENTITY         = player_ship;
   float time;
   float time_since_last_spawn = 0;
 
@@ -129,6 +131,7 @@ int main(int argc, char *argv[]) {
     ai_shoot();
 
     // Physis
+    build_entity_bvh();
     apply_vec_thrusters(delta_t_f32);
     apply_thrusters(delta_t_f32);
     apply_movement(delta_t_f32);
@@ -143,7 +146,7 @@ int main(int argc, char *argv[]) {
     // GRAPHICS
     vlk_queueModelDrawCommands(ENTITY_COUNT, ENTITY_TRANSFORM, ENTITY_COLORS,
                                ENTITY_SCALE, ENTITY_MODEL);
-    vlk_queueFxDrawCommands(FX_COUNT, FX_LOCATION, FX_T);
+    vlk_queueFxDrawCommands(FX_COUNT, FX_LOCATION, FX_T, FX_MAX_T);
 
     // Freecam
     if (!PLAYER_CONTROLLED_ENTITY) {

@@ -24,7 +24,8 @@ layout(buffer_reference, scalar) readonly buffer InstanceBuffer {
 };
 
 layout(push_constant) uniform Push {
-  mat4 camera;
+  mat4 view;
+  mat4 proj;
   InstanceBuffer instance_buffer;
 } pc;
 
@@ -32,7 +33,7 @@ layout(location = 0) out vec3 fragColor;
 
 void main() {
   InstanceData instance = pc.instance_buffer.instances[gl_InstanceIndex];
-  gl_Position = (pc.camera * instance.transform * vec4(instance.vertex_buffer.vertices[gl_VertexIndex].pos * instance.scale, 1.0)) * vec4(1., -1., 1., 1.);
+  gl_Position = ((pc.proj * pc.view) * instance.transform * vec4(instance.vertex_buffer.vertices[gl_VertexIndex].pos * instance.scale, 1.0)) * vec4(1., -1., 1., 1.);
   fragColor = instance.vertex_buffer.vertices[gl_VertexIndex].col
       * instance.col
       * max(0.01, dot(

@@ -65,6 +65,7 @@ typedef struct ModelInstanceDataBuffer {
 typedef struct FxInstanceData {
   vec3 pos;
   float t;
+  float max_t;
 } FxInstanceData;
 
 #define MAX_DRAWS 1e6
@@ -121,7 +122,6 @@ uint32_t GAME_MODEL_COUNT = 0;
 
 // Render state
 uint32_t GAME_CURRENT_SWAPCHAIN_IMAGE = 0;
-mat4 GAME_VIEWPROJ;
 DrawCommands GAME_MODEL_DRAW_COMMANDS;
 DrawCommands GAME_FX_DRAW_COMMANDS;
 ModelInstanceDataBuffer GAME_MODEL_INSTANCE_BUFFER;
@@ -155,7 +155,8 @@ void vlk_createShaderModule(char *path, VkShaderModule *module) {
 }
 
 typedef struct {
-  mat4 viewproj;
+  mat4 view;
+  mat4 proj;
   VkDeviceAddress instance_buffer;
 } PushConstant;
 
@@ -840,26 +841,26 @@ int vlk_beginDraw() {
               (VkRect2D){.extent = GAME_SURFACE_CAPABILITIES.currentExtent,
                          .offset = (VkOffset2D){.x = 0, .y = 0}}});
 
-  // Camera
-  mat4 view;
-  glm_mat4_inv(GAME_CAM_TRANSFORM, view);
-
-  // Viewproj
-  glm_mat4_mul(GAME_PERSP_PROJ, view, GAME_VIEWPROJ);
-
   return 0;
 }
 
-void vlk_queueFxDrawCommands(uint32_t fx_count, vec3 *fx_loc, float *fx_t) {
+void vlk_queueFxDrawCommands(uint32_t fx_count, vec3 *fx_loc, float *fx_t,
+                             float *fx_max_t) {
+  int drawn_fx_count = 0;
   for (uint32_t i = 0; i < fx_count; i++) {
-    glm_vec3_copy(fx_loc[i], GAME_FX_INSTANCE_BUFFER.hostInsanceBuffer[i].pos);
-    GAME_FX_INSTANCE_BUFFER.hostInsanceBuffer[i].t = fx_t[i];
+    if (fx_t[i] > fx_max_t[i]) {
+      continue;
+    }
+    glm_vec3_copy(fx_loc[i], GAME_FX_INSTANCE_BUFFER.hostInsanceBuffer[drawn_fx_count].pos);
+    GAME_FX_INSTANCE_BUFFER.hostInsanceBuffer[drawn_fx_count].t     = fx_t[i];
+    GAME_FX_INSTANCE_BUFFER.hostInsanceBuffer[drawn_fx_count].max_t = fx_max_t[i];
+    drawn_fx_count++;
   }
   // Add a draw command for this model; this may have an instance count of 0.
   GAME_FX_DRAW_COMMANDS.hostDrawCommands[0] =
       (VkDrawIndirectCommand){.firstInstance = 0,
                               .firstVertex   = 0,
-                              .instanceCount = fx_count,
+                              .instanceCount = drawn_fx_count,
                               .vertexCount   = 6};
 }
 
@@ -918,7 +919,8 @@ void vlk_queueModelDrawCommands(uint32_t entity_count, mat4 *entity_transforms,
 void vlk_issueDraws() {
 
   // Cam matrix
-  PushConstant pc = {.viewproj = M4(GAME_VIEWPROJ)};
+  PushConstant pc = {.proj = M4(GAME_PERSP_PROJ)};
+  glm_mat4_inv(GAME_CAM_TRANSFORM, pc.view);
 
   // Models
   pc.instance_buffer = GAME_MODEL_INSTANCE_BUFFER.bdaInstanceBuffer;
