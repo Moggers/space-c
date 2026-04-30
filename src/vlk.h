@@ -55,6 +55,7 @@ typedef struct ModelInstanceData {
   VkDeviceAddress vertex_buffer;
   vec3 col;
   vec3 scale;
+  float dead_time;
 } ModelInstanceData;
 
 typedef struct ModelInstanceDataBuffer {
@@ -851,9 +852,12 @@ void vlk_queueFxDrawCommands(uint32_t fx_count, vec3 *fx_loc, float *fx_t,
     if (fx_t[i] > fx_max_t[i]) {
       continue;
     }
-    glm_vec3_copy(fx_loc[i], GAME_FX_INSTANCE_BUFFER.hostInsanceBuffer[drawn_fx_count].pos);
-    GAME_FX_INSTANCE_BUFFER.hostInsanceBuffer[drawn_fx_count].t     = fx_t[i];
-    GAME_FX_INSTANCE_BUFFER.hostInsanceBuffer[drawn_fx_count].max_t = fx_max_t[i];
+    glm_vec3_copy(
+        fx_loc[i],
+        GAME_FX_INSTANCE_BUFFER.hostInsanceBuffer[drawn_fx_count].pos);
+    GAME_FX_INSTANCE_BUFFER.hostInsanceBuffer[drawn_fx_count].t = fx_t[i];
+    GAME_FX_INSTANCE_BUFFER.hostInsanceBuffer[drawn_fx_count].max_t =
+        fx_max_t[i];
     drawn_fx_count++;
   }
   // Add a draw command for this model; this may have an instance count of 0.
@@ -865,8 +869,8 @@ void vlk_queueFxDrawCommands(uint32_t fx_count, vec3 *fx_loc, float *fx_t,
 }
 
 void vlk_queueModelDrawCommands(uint32_t entity_count, mat4 *entity_transforms,
-                                vec3 *col, vec3 *scale,
-                                int32_t *entity_models) {
+                                vec3 *col, vec3 *scale, int32_t *entity_models,
+                                float *dead_time) {
 
   // Start with zero instances
   uint32_t instance_count = 0;
@@ -896,6 +900,8 @@ void vlk_queueModelDrawCommands(uint32_t entity_count, mat4 *entity_transforms,
             scale[i][1];
         GAME_MODEL_INSTANCE_BUFFER.hostInsanceBuffer[instance_count].scale[2] =
             scale[i][2];
+        GAME_MODEL_INSTANCE_BUFFER.hostInsanceBuffer[instance_count].dead_time =
+            dead_time[i];
         glm_mat4_ucopy(
             (vec4 *)entity_transforms[i],
             (vec4 *)GAME_MODEL_INSTANCE_BUFFER.hostInsanceBuffer[instance_count]

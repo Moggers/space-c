@@ -17,6 +17,7 @@ struct InstanceData {
   VertexBuffer vertex_buffer;
   vec3 col;
   vec3 scale;
+  float dead_time;
 };
 
 layout(buffer_reference, scalar) readonly buffer InstanceBuffer {
@@ -33,7 +34,7 @@ layout(location = 0) out vec3 fragColor;
 
 void main() {
   InstanceData instance = pc.instance_buffer.instances[gl_InstanceIndex];
-  gl_Position = ((pc.proj * pc.view) * instance.transform * vec4(instance.vertex_buffer.vertices[gl_VertexIndex].pos * instance.scale, 1.0)) * vec4(1., -1., 1., 1.);
+  gl_Position = ((pc.proj * pc.view) * instance.transform * vec4((instance.vertex_buffer.vertices[gl_VertexIndex].pos + (instance.vertex_buffer.vertices[gl_VertexIndex].normal * instance.dead_time)) * instance.scale, 1.0)) * vec4(1., -1., 1., 1.);
   fragColor = instance.vertex_buffer.vertices[gl_VertexIndex].col
       * instance.col
       * max(0.01, dot(

@@ -1,19 +1,19 @@
-#include "./engine.h"
-#include "./vlk.h"
-#include "vendor/cglm/affine-pre.h"
 #include "vendor/cglm/mat4.h"
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_keycode.h>
 #include <SDL3/SDL_scancode.h>
 #include <SDL3/SDL_video.h>
 #include <assert.h>
-#include <bits/time.h>
 #include <inttypes.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
 #include <time.h>
 #include <vulkan/vulkan_core.h>
+
+#include "./engine.h"
+#include "./vlk.h"
+#include "engine.h"
 
 #define FAST_OBJ_IMPLEMENTATION
 #include "./vendor/fast_obj.h"
@@ -48,6 +48,7 @@ int main(int argc, char *argv[]) {
   glm_translate(spawn_location, (vec3){1000., 0., 0.});
   uint32_t station_b = make_entity(spawn_location, 2, (vec3){0., 0., 1.}, -1,
                                    -1, station_model, "Station B");
+  glm_translate(spawn_location, (vec3){-900., 0., 0.});
   ENTITY_COLLIDER_GROUP[station_b] = 0;
   PLAYER_CONTROLLED_ENTITY         = player_ship;
   float time;
@@ -92,6 +93,13 @@ int main(int argc, char *argv[]) {
         break;
       }
       }
+    }
+
+    if (ENTITY_DEAD[PLAYER_CONTROLLED_ENTITY] > 2) {
+      player_ship = make_entity(spawn_location, 1, (vec3){0., 1., 0.}, 1, 100,
+                                ship_model, "Player Ship");
+      give_gun(player_ship, 1000, 0.2, ship_model);
+      PLAYER_CONTROLLED_ENTITY = player_ship;
     }
 
     time_since_last_spawn += delta_t_f32;
@@ -139,13 +147,14 @@ int main(int argc, char *argv[]) {
 
     // Guns
     fire_guns(delta_t_f32);
+    death_animations(delta_t_f32);
 
     // FX
     play_fx(delta_t_f32);
 
     // GRAPHICS
     vlk_queueModelDrawCommands(ENTITY_COUNT, ENTITY_TRANSFORM, ENTITY_COLORS,
-                               ENTITY_SCALE, ENTITY_MODEL);
+                               ENTITY_SCALE, ENTITY_MODEL, ENTITY_DEAD);
     vlk_queueFxDrawCommands(FX_COUNT, FX_LOCATION, FX_T, FX_MAX_T);
 
     // Freecam
@@ -166,13 +175,23 @@ int main(int argc, char *argv[]) {
       ENTITY_CURRENT_VEC_THRUST[PLAYER_CONTROLLED_ENTITY][2] =
           (keys[SDL_SCANCODE_A] - keys[SDL_SCANCODE_D]) *
           ENTITY_VEC_THRUST[PLAYER_CONTROLLED_ENTITY];
-      ENTITY_CURRENT_THRUST[PLAYER_CONTROLLED_ENTITY] =
+      ENTITY_CURRENT_THRUST[PLAYER_CONTROLLED_ENTITY][2] =
           ENTITY_THRUST_POWER[PLAYER_CONTROLLED_ENTITY] * keys[SDL_SCANCODE_W];
+      ENTITY_CURRENT_THRUST[PLAYER_CONTROLLED_ENTITY][0] =
+          ENTITY_THRUST_POWER[PLAYER_CONTROLLED_ENTITY] / 4 *
+              keys[SDL_SCANCODE_E] -
+          ENTITY_THRUST_POWER[PLAYER_CONTROLLED_ENTITY] / 4 *
+              keys[SDL_SCANCODE_Q];
+      ENTITY_CURRENT_THRUST[PLAYER_CONTROLLED_ENTITY][1] =
+          ENTITY_THRUST_POWER[PLAYER_CONTROLLED_ENTITY] / 4 *
+              keys[SDL_SCANCODE_X] -
+          ENTITY_THRUST_POWER[PLAYER_CONTROLLED_ENTITY] / 4 *
+              keys[SDL_SCANCODE_Z];
       glm_mat4_copy(ENTITY_TRANSFORM[PLAYER_CONTROLLED_ENTITY],
                     GAME_CAM_TRANSFORM);
       glm_translate(GAME_CAM_TRANSFORM, (vec3){0., 4., -10.});
 
-      ENTITY_GUN[PLAYER_CONTROLLED_ENTITY].active = keys[SDL_SCANCODE_SPACE];
+      GUN_ACTIVE[PLAYER_CONTROLLED_ENTITY] = keys[SDL_SCANCODE_SPACE];
     }
 
     if (vlk_beginDraw() != 0)

@@ -1,10 +1,20 @@
 CC = cc
-CFLAGS = -g -Wall  -O3 
-LDFLAGS = -lSDL3 -lvulkan -lm 
+CFLAGS = -g -Wall  -O3
+LDFLAGS = -lSDL3 -lvulkan -lm
+
+WIN_CC = x86_64-w64-mingw32-gcc
+WIN_CFLAGS = -Wall -O3
+WIN_LDFLAGS = -lSDL3 -lvulkan-1 -lm -mwindows
+
 all: bin/main bin/shaders/model_vertex.spv bin/shaders/fx_fragment.spv bin/shaders/fx_vertex.spv bin/shaders/model_fragment.spv bin/assets
+
+windows: bin/main.exe bin/shaders/model_vertex.spv bin/shaders/fx_fragment.spv bin/shaders/fx_vertex.spv bin/shaders/model_fragment.spv bin/assets
 
 bin/main: src/* | bin
 	$(CC) $(CFLAGS) -o $@ ./src/main.c $(LDFLAGS)
+
+bin/main.exe: src/* | bin
+	$(WIN_CC) $(WIN_CFLAGS) -o $@ ./src/main.c $(WIN_LDFLAGS)
 
 opt-check: 
 	$(CC) $(CFLAGS) -fopt-info-vec-missed=stderr -o $@ ./src/main.c $(LDFLAGS)
@@ -33,4 +43,4 @@ run: all
 clean:
 	rm -rf bin
 
-.PHONY: all run clean opt-check
+.PHONY: all windows run clean opt-check
