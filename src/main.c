@@ -33,8 +33,8 @@ int main(int argc, char *argv[]) {
   vlk_createSwapchain();
   vlk_createPipelines();
 
-  uint32_t ship_model    = load_model("./bin/assets/ship.obj");
-  uint32_t station_model = load_model("./bin/assets/station.obj");
+  uint32_t ship_model    = load_model("./assets/ship.obj");
+  uint32_t station_model = load_model("./assets/station.obj");
   mat4 spawn_location;
   glm_mat4_identity(spawn_location);
   uint32_t station_a = make_entity(spawn_location, 1, (vec3){0., 1., 0.}, -1,
@@ -133,24 +133,7 @@ int main(int argc, char *argv[]) {
     glm_rotate_y(ENTITY_TRANSFORM[station_b], 0.1f * delta_t_f32,
                  ENTITY_TRANSFORM[station_b]);
 
-    // AI routines
-    ai_select_targets();
-    ai_thrusters();
-    ai_shoot();
-
-    // Physis
-    build_entity_bvh();
-    apply_vec_thrusters(delta_t_f32);
-    apply_thrusters(delta_t_f32);
-    apply_movement(delta_t_f32);
-    do_collisions();
-
-    // Guns
-    fire_guns(delta_t_f32);
-    death_animations(delta_t_f32);
-
-    // FX
-    play_fx(delta_t_f32);
+    sim_loop(delta_t_f32);
 
     // GRAPHICS
     vlk_queueModelDrawCommands(ENTITY_COUNT, ENTITY_TRANSFORM, ENTITY_COLORS,

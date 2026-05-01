@@ -12,7 +12,7 @@ WIN_LDFLAGS = -static -static-libgcc \
               -Wl,-Bdynamic -lvulkan-1 \
               -mwindows
 
-all: bin/main bin/shaders/model_vertex.spv bin/shaders/fx_fragment.spv bin/shaders/fx_vertex.spv bin/shaders/model_fragment.spv bin/assets
+linux: bin/main bin/shaders/model_vertex.spv bin/shaders/fx_fragment.spv bin/shaders/fx_vertex.spv bin/shaders/model_fragment.spv bin/assets
 
 windows: bin/main.exe bin/shaders/model_vertex.spv bin/shaders/fx_fragment.spv bin/shaders/fx_vertex.spv bin/shaders/model_fragment.spv bin/assets
 
@@ -43,10 +43,10 @@ bin/assets: assets | bin
 bin:
 	mkdir -p bin bin/assets bin/shaders
 
-run: all
-	./bin/main
+run: linux
+	cd ./bin && ./main
 
 clean:
 	rm -rf bin
 
-.PHONY: all windows run clean opt-check
+.PHONY: linux windows run clean opt-check

@@ -739,11 +739,11 @@ void vlk_createGraphicsPipeline(char *vert_shader, char *frag_shader,
 }
 
 void vlk_createPipelines() {
-  vlk_createGraphicsPipeline("./bin/shaders/model_vertex.spv",
-                             "./bin/shaders/model_fragment.spv",
+  vlk_createGraphicsPipeline("./shaders/model_vertex.spv",
+                             "./shaders/model_fragment.spv",
                              &GAME_VK_MODEL_PIPELINE);
-  vlk_createGraphicsPipeline("./bin/shaders/fx_vertex.spv",
-                             "./bin/shaders/fx_fragment.spv",
+  vlk_createGraphicsPipeline("./shaders/fx_vertex.spv",
+                             "./shaders/fx_fragment.spv",
                              &GAME_VK_FX_PIPELINE);
 }
 

@@ -132,5 +132,27 @@ void fire_guns(float delta_time) {
   }
 }
 
+void sim_loop(float delta_time) {
+
+    // AI routines
+    ai_select_targets();
+    ai_thrusters();
+    ai_shoot();
+
+    // Physis
+    build_entity_bvh();
+    apply_vec_thrusters(delta_time);
+    apply_thrusters(delta_time);
+    apply_movement(delta_time);
+    do_collisions();
+
+    // Guns
+    fire_guns(delta_time);
+    death_animations(delta_time);
+
+    // FX
+    play_fx(delta_time);
+}
+
 
 #endif
