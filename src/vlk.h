@@ -14,14 +14,19 @@
 #include <inttypes.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <string.h>
 #include <strings.h>
+#include <sys/select.h>
 #include <sys/types.h>
 #include <vulkan/vulkan_core.h>
 
 #define VK_WRAP(expr)                                                          \
   {                                                                            \
     VkResult res = expr;                                                       \
-    assert(res == VK_SUCCESS);                                                 \
+    if (res != VK_SUCCESS) {                                                   \
+      fprintf(stderr, "Expected VK_SUCCESS, got %d\n", res);                   \
+      assert(VK_SUCCESS == res);                                               \
+    }                                                                          \
   }
 
 #define VK_WRAP_ARR(type, name, fn, ...)                                       \
@@ -56,6 +61,7 @@ typedef struct ModelInstanceData {
   vec3 col;
   vec3 scale;
   float dead_time;
+  uint32_t entity_id;
 } ModelInstanceData;
 
 typedef struct ModelInstanceDataBuffer {
@@ -82,6 +88,18 @@ typedef struct FxInstanceDataBuffer {
   VkDeviceAddress bdaInstanceBuffer;
   FxInstanceData *hostInsanceBuffer;
 } FxInstanceDataBuffer;
+
+typedef struct SelectionDataBuffer {
+  VkDeviceAddress bdaSelectionData;
+  uint32_t *hostSelectionData;
+  VkDeviceSize begin;
+} SelectionDataBuffer;
+
+typedef struct SelectionPC {
+  VkDeviceAddress outBuffer;
+  int32_t image_size[2];
+  uint32_t max_values;
+} SelectionPC;
 
 // Global vulkan shit
 VkInstance GAME_VK_INSTANCE              = VK_NULL_HANDLE;
@@ -119,7 +137,7 @@ VkFence GAME_PRESENT_FENCE;
 
 // Assets
 Model GAME_MODELS[512];
-uint32_t GAME_MODEL_COUNT = 0;
+uint32_t GAME_MODEL_COUNT = 1;
 
 // Render state
 uint32_t GAME_CURRENT_SWAPCHAIN_IMAGE = 0;
@@ -267,8 +285,7 @@ unsigned int obj_to_indexbuffer(fastObjMesh *brush,
   return out_index_count;
 }
 
-unsigned int load_model(char *obj_path) {
-  fastObjMesh *brush = fast_obj_read(obj_path);
+unsigned int load_model(fastObjMesh *brush) {
   assert(brush != 0);
   SomeShitAllocated vertex_buffer;
   unsigned int vertex_count = obj_to_indexbuffer(brush, &vertex_buffer);
@@ -470,14 +487,19 @@ void vlk_init(SDL_Window *window) {
   for (int i = 0; i < device_count; i++) {
     VkPhysicalDeviceProperties properties;
     vkGetPhysicalDeviceProperties(pdevices[i], &properties);
+    printf("Device %s\n", properties.deviceName);
   }
   GAME_VK_PHYSICAL_DEVICE = pdevices[0];
+  VkPhysicalDeviceProperties properties;
+  vkGetPhysicalDeviceProperties(GAME_VK_PHYSICAL_DEVICE, &properties);
+  printf("Picked %s\n", properties.deviceName);
   VK_WRAP(vkCreateDevice(
       pdevices[0],
       &(VkDeviceCreateInfo){
           .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
           .pEnabledFeatures =
-              &(VkPhysicalDeviceFeatures){.multiDrawIndirect = VK_TRUE},
+              &(VkPhysicalDeviceFeatures){.multiDrawIndirect = VK_TRUE,
+                                          .independentBlend  = VK_TRUE},
           .pNext =
               &(VkPhysicalDeviceDynamicRenderingFeatures){
                   .sType =
@@ -497,10 +519,9 @@ void vlk_init(SDL_Window *window) {
                                       &(VkPhysicalDeviceScalarBlockLayoutFeatures){
                                           .sType =
                                               VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SCALAR_BLOCK_LAYOUT_FEATURES,
-                                          .scalarBlockLayout = VK_TRUE,
-                                      }}}},
+                                          .scalarBlockLayout = VK_TRUE}}}},
           .queueCreateInfoCount  = 1,
-          .enabledExtensionCount = 7,
+          .enabledExtensionCount = 8,
           .ppEnabledExtensionNames =
               (const char *[]){VK_KHR_SWAPCHAIN_EXTENSION_NAME,
                                VK_KHR_UNIFIED_IMAGE_LAYOUTS_EXTENSION_NAME,
@@ -508,7 +529,9 @@ void vlk_init(SDL_Window *window) {
                                VK_KHR_DEPTH_STENCIL_RESOLVE_EXTENSION_NAME,
                                VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME,
                                VK_EXT_SCALAR_BLOCK_LAYOUT_EXTENSION_NAME,
-                               VK_KHR_SHADER_DRAW_PARAMETERS_EXTENSION_NAME},
+                               VK_KHR_SHADER_DRAW_PARAMETERS_EXTENSION_NAME,
+                               VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME},
+          // VK_EXT_DESCRIPTOR_HEAP_EXTENSION_NAME},
           .pQueueCreateInfos =
               &(const VkDeviceQueueCreateInfo){
                   .sType      = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
@@ -522,7 +545,9 @@ void vlk_init(SDL_Window *window) {
       &(VkBufferCreateInfo){.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                      VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
                                      VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
-                                     VK_BUFFER_USAGE_2_INDEX_BUFFER_BIT,
+                                     VK_BUFFER_USAGE_2_INDEX_BUFFER_BIT |
+                                     VK_BUFFER_USAGE_2_TRANSFER_DST_BIT |
+                                     VK_BUFFER_USAGE_2_TRANSFER_SRC_BIT,
                             .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
                             .size  = 256ull * 1e6,
                             .sharingMode = VK_SHARING_MODE_EXCLUSIVE},
@@ -536,8 +561,8 @@ void vlk_init(SDL_Window *window) {
   VkPhysicalDeviceMemoryProperties memprops;
   vkGetPhysicalDeviceMemoryProperties(GAME_VK_PHYSICAL_DEVICE, &memprops);
   for (int i = 0; i < memprops.memoryTypeCount; i++) {
-    // If this memory type is not one of the types usable by the buffer; skip
-    // it
+    // If this memory type is not one of the types usable by the buffer;
+    // skip it
     if ((memreqs.memoryTypeBits & (1 << i)) == 0) {
       continue;
     }
@@ -639,7 +664,6 @@ void vlk_init(SDL_Window *window) {
 
 void vlk_createGraphicsPipeline(char *vert_shader, char *frag_shader,
                                 VkPipeline *p) {
-
   VkShaderModule vert_module;
   VkShaderModule frag_module;
 
@@ -653,9 +677,10 @@ void vlk_createGraphicsPipeline(char *vert_shader, char *frag_shader,
           .pNext =
               &(VkPipelineRenderingCreateInfoKHR){
                   .sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
-                  .colorAttachmentCount    = 1,
-                  .pColorAttachmentFormats = &GAME_VK_SURFACE_FORMAT.format,
-                  .depthAttachmentFormat   = VK_FORMAT_D32_SFLOAT,
+                  .colorAttachmentCount = 1,
+                  .pColorAttachmentFormats =
+                      (VkFormat[1]){GAME_VK_SURFACE_FORMAT.format},
+                  .depthAttachmentFormat = VK_FORMAT_D32_SFLOAT,
               },
           .pRasterizationState =
               &(VkPipelineRasterizationStateCreateInfo){
@@ -743,8 +768,7 @@ void vlk_createPipelines() {
                              "./shaders/model_fragment.spv",
                              &GAME_VK_MODEL_PIPELINE);
   vlk_createGraphicsPipeline("./shaders/fx_vertex.spv",
-                             "./shaders/fx_fragment.spv",
-                             &GAME_VK_FX_PIPELINE);
+                             "./shaders/fx_fragment.spv", &GAME_VK_FX_PIPELINE);
 }
 
 int vlk_beginDraw() {
@@ -827,17 +851,17 @@ int vlk_beginDraw() {
           .colorAttachmentCount = 1,
           .layerCount           = 1,
           .pColorAttachments =
-              &(VkRenderingAttachmentInfo){
-                  .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-                  .clearValue =
-                      (VkClearValue){.color =
-                                         (VkClearColorValue){
-                                             .float32 = {0.0, 0.0, 0.0, 1.}}},
-                  .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
-                  .imageView =
-                      GAME_SWAPCHAIN_IMAGE_VIEWS[GAME_CURRENT_SWAPCHAIN_IMAGE],
-                  .loadOp  = VK_ATTACHMENT_LOAD_OP_CLEAR,
-                  .storeOp = VK_ATTACHMENT_STORE_OP_STORE},
+              (VkRenderingAttachmentInfo[1]){
+                  {.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+                   .clearValue =
+                       (VkClearValue){.color =
+                                          (VkClearColorValue){
+                                              .float32 = {0.0, 0.0, 0.0, 1.}}},
+                   .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
+                   .imageView =
+                       GAME_SWAPCHAIN_IMAGE_VIEWS[GAME_CURRENT_SWAPCHAIN_IMAGE],
+                   .loadOp  = VK_ATTACHMENT_LOAD_OP_CLEAR,
+                   .storeOp = VK_ATTACHMENT_STORE_OP_STORE}},
           .renderArea =
               (VkRect2D){.extent = GAME_SURFACE_CAPABILITIES.currentExtent,
                          .offset = (VkOffset2D){.x = 0, .y = 0}}});
@@ -871,12 +895,11 @@ void vlk_queueFxDrawCommands(uint32_t fx_count, vec3 *fx_loc, float *fx_t,
 void vlk_queueModelDrawCommands(uint32_t entity_count, mat4 *entity_transforms,
                                 vec3 *col, vec3 *scale, int32_t *entity_models,
                                 float *dead_time) {
-
   // Start with zero instances
   uint32_t instance_count = 0;
 
   // For each model
-  for (uint32_t model_index = 0; model_index < GAME_MODEL_COUNT;
+  for (uint32_t model_index = 1; model_index < GAME_MODEL_COUNT;
        model_index++) {
     uint32_t first_instance = instance_count;
 
@@ -902,6 +925,8 @@ void vlk_queueModelDrawCommands(uint32_t entity_count, mat4 *entity_transforms,
             scale[i][2];
         GAME_MODEL_INSTANCE_BUFFER.hostInsanceBuffer[instance_count].dead_time =
             dead_time[i];
+        GAME_MODEL_INSTANCE_BUFFER.hostInsanceBuffer[instance_count].entity_id =
+            i;
         glm_mat4_ucopy(
             (vec4 *)entity_transforms[i],
             (vec4 *)GAME_MODEL_INSTANCE_BUFFER.hostInsanceBuffer[instance_count]
@@ -912,7 +937,8 @@ void vlk_queueModelDrawCommands(uint32_t entity_count, mat4 *entity_transforms,
       }
     }
 
-    // Add a draw command for this model; this may have an instance count of 0.
+    // Add a draw command for this model; this may have an instance count of
+    // 0.
     GAME_MODEL_DRAW_COMMANDS.hostDrawCommands[model_index] =
         (VkDrawIndirectCommand){
             .firstInstance = first_instance,
@@ -923,7 +949,6 @@ void vlk_queueModelDrawCommands(uint32_t entity_count, mat4 *entity_transforms,
 }
 
 void vlk_issueDraws() {
-
   // Cam matrix
   PushConstant pc = {.proj = M4(GAME_PERSP_PROJ)};
   glm_mat4_inv(GAME_CAM_TRANSFORM, pc.view);

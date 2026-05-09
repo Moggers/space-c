@@ -1,9 +1,5 @@
 /* bvh.h - single-header pure C BVH library (3D)
  *
- * Build a bounding-volume hierarchy over axis-aligned bounding boxes and
- * query it with rays, AABBs, points, or against another BVH. Intended for
- * collision broadphase, ray casting, frustum / region selection, etc.
- *
  * Usage
  * -----
  *   In ONE translation unit:
@@ -56,8 +52,6 @@
  *
  *         bvh_free(&bvh);
  *     }
- *
- * Public domain / 0BSD - see end of file.
  */
 
 #ifndef BVH_H_INCLUDED
@@ -164,6 +158,12 @@ typedef int (*bvh_ray_cb)(uint32_t prim_index, bvh_ray* ray, void* user);
 
 void bvh_ray_query(const bvh_t* bvh, bvh_ray* ray, bvh_ray_cb cb, void* user);
 
+/* Same as bvh_ray_query, but the callback only fires for primitives whose
+ * own stored AABB the ray actually intersects. Use this when the BVH leaf
+ * AABB is too coarse and you want the BVH itself to filter out prims that
+ * share a leaf with the hit but aren't on the ray. */
+void bvh_ray_query_tight(const bvh_t* bvh, bvh_ray* ray, bvh_ray_cb cb, void* user);
+
 /* ============================================================
  *  AABB collision queries
  * ============================================================ */
@@ -192,6 +192,32 @@ void bvh_overlap_query(const bvh_t* bvh_a, const bvh_t* bvh_b,
  * same BVH whose AABBs overlap is reported exactly once. Useful as a
  * broadphase for N-body collision detection. */
 void bvh_self_overlap(const bvh_t* bvh, bvh_pair_cb cb, void* user);
+
+/* ============================================================
+ *  Closest-point queries
+ * ============================================================ */
+
+typedef struct {
+    float point[3];
+    float max_dist_sq;   /* squared search radius; shrink during query to prune */
+} bvh_closest;
+
+/* Per-leaf-primitive callback during a closest-point query.
+ *   - `prim_index` is the original primitive index (as supplied to bvh_build).
+ *   - The callback should test `closest->point` against the primitive and,
+ *     on a closer hit, shrink `closest->max_dist_sq` so that the traversal
+ *     can prune farther boxes.
+ *   - Return non-zero to halt the traversal early; return zero to keep
+ *     searching for a closer primitive. */
+typedef int (*bvh_closest_cb)(uint32_t prim_index, bvh_closest* closest, void* user);
+
+/* Visit primitives whose AABB lies within `closest->max_dist_sq` of
+ * `closest->point`, in approximately near-to-far order so the callback
+ * can shrink `max_dist_sq` to prune the remainder of the search.
+ * Initialize `max_dist_sq` to FLT_MAX (or a squared search radius)
+ * before calling; on return it holds the final pruned bound. */
+void bvh_closest_query(const bvh_t* bvh, bvh_closest* closest,
+                       bvh_closest_cb cb, void* user);
 
 /* ============================================================
  *  Helpers
@@ -619,6 +645,45 @@ void bvh_ray_query(const bvh_t* bvh, bvh_ray* ray, bvh_ray_cb cb, void* user) {
     }
 }
 
+void bvh_ray_query_tight(const bvh_t* bvh, bvh_ray* ray, bvh_ray_cb cb, void* user) {
+    if (!bvh || bvh->node_count == 0) return;
+
+    uint32_t stack[BVH__TRAVERSE_STACK];
+    int sp = 0;
+    uint32_t node_idx = 0;
+
+    for (;;) {
+        const bvh_node* node = &bvh->nodes[node_idx];
+        if (node->prim_count > 0) {
+            uint32_t s = node->left_first;
+            for (uint32_t i = 0; i < node->prim_count; ++i) {
+                uint32_t pi = bvh->prim_idx[s + i];
+                if (bvh__ray_aabb(ray, &bvh->prim_aabbs[pi]) != FLT_MAX) {
+                    if (cb(pi, ray, user)) return;
+                }
+            }
+            if (sp == 0) return;
+            node_idx = stack[--sp];
+            continue;
+        }
+
+        uint32_t c0 = node->left_first;
+        uint32_t c1 = c0 + 1;
+        float t0 = bvh__ray_aabb(ray, &bvh->nodes[c0].bounds);
+        float t1 = bvh__ray_aabb(ray, &bvh->nodes[c1].bounds);
+
+        if (t0 < t1) {
+            if (t1 != FLT_MAX) { BVH_ASSERT(sp < BVH__TRAVERSE_STACK); stack[sp++] = c1; }
+            if (t0 != FLT_MAX) { node_idx = c0; continue; }
+        } else {
+            if (t0 != FLT_MAX) { BVH_ASSERT(sp < BVH__TRAVERSE_STACK); stack[sp++] = c0; }
+            if (t1 != FLT_MAX) { node_idx = c1; continue; }
+        }
+        if (sp == 0) return;
+        node_idx = stack[--sp];
+    }
+}
+
 /* ---- AABB / point queries ---- */
 
 void bvh_aabb_query(const bvh_t* bvh, const bvh_aabb* box,
@@ -686,6 +751,60 @@ void bvh_point_query(const bvh_t* bvh, const float point[3],
         if (bvh__aabb_contains_pt(&bvh->nodes[c1].bounds, point)) {
             BVH_ASSERT(sp < BVH__TRAVERSE_STACK); stack[sp++] = c1;
         }
+    }
+}
+
+/* ---- Closest-point query ---- */
+
+static inline float bvh__pt_aabb_dist_sq(const bvh_aabb* b, const float p[3]) {
+    float d = 0.0f;
+    for (int i = 0; i < 3; ++i) {
+        float v = p[i];
+        if (v < b->min[i])      { float dd = b->min[i] - v; d += dd * dd; }
+        else if (v > b->max[i]) { float dd = v - b->max[i]; d += dd * dd; }
+    }
+    return d;
+}
+
+void bvh_closest_query(const bvh_t* bvh, bvh_closest* closest,
+                       bvh_closest_cb cb, void* user) {
+    if (!bvh || bvh->node_count == 0) return;
+    if (bvh__pt_aabb_dist_sq(&bvh->nodes[0].bounds, closest->point) > closest->max_dist_sq) return;
+
+    uint32_t stack[BVH__TRAVERSE_STACK];
+    int sp = 0;
+    uint32_t node_idx = 0;
+
+    for (;;) {
+        const bvh_node* node = &bvh->nodes[node_idx];
+        if (node->prim_count > 0) {
+            uint32_t s = node->left_first;
+            for (uint32_t i = 0; i < node->prim_count; ++i) {
+                uint32_t pi = bvh->prim_idx[s + i];
+                if (bvh__pt_aabb_dist_sq(&bvh->prim_aabbs[pi], closest->point) <= closest->max_dist_sq) {
+                    if (cb(pi, closest, user)) return;
+                }
+            }
+            if (sp == 0) return;
+            node_idx = stack[--sp];
+            continue;
+        }
+
+        uint32_t c0 = node->left_first;
+        uint32_t c1 = c0 + 1;
+        float d0 = bvh__pt_aabb_dist_sq(&bvh->nodes[c0].bounds, closest->point);
+        float d1 = bvh__pt_aabb_dist_sq(&bvh->nodes[c1].bounds, closest->point);
+
+        /* Descend the closer child first; defer the farther one if still in range. */
+        if (d0 < d1) {
+            if (d1 <= closest->max_dist_sq) { BVH_ASSERT(sp < BVH__TRAVERSE_STACK); stack[sp++] = c1; }
+            if (d0 <= closest->max_dist_sq) { node_idx = c0; continue; }
+        } else {
+            if (d0 <= closest->max_dist_sq) { BVH_ASSERT(sp < BVH__TRAVERSE_STACK); stack[sp++] = c0; }
+            if (d1 <= closest->max_dist_sq) { node_idx = c1; continue; }
+        }
+        if (sp == 0) return;
+        node_idx = stack[--sp];
     }
 }
 
@@ -822,23 +941,3 @@ int bvh_ray_triangle(const bvh_ray* ray,
 #endif /* BVH_IMPLEMENTATION */
 
 #endif /* BVH_H_INCLUDED */
-
-/* ============================================================
- *  License (0BSD)
- * ============================================================
- *
- * Copyright (c) 2026
- *
- * Permission to use, copy, modify, and/or distribute this software for
- * any purpose with or without fee is hereby granted.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL
- * WARRANTIES WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE
- * AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL
- * DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR
- * PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
- * TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
- * PERFORMANCE OF THIS SOFTWARE.
- */
-

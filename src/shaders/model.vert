@@ -18,6 +18,7 @@ struct InstanceData {
   vec3 col;
   vec3 scale;
   float dead_time;
+  int entity_id;
 };
 
 layout(buffer_reference, scalar) readonly buffer InstanceBuffer {

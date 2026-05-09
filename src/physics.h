@@ -1,13 +1,44 @@
 #ifndef GAME_PHYSICS
 #define GAME_PHYSICS
-#include "vendor/cglm/cglm.h"
-#include "./entities.h"
 #include "./bvh.h"
+#include "./entities.h"
+#include "./vendor/fast_obj.h"
+#include "vendor/cglm/cglm.h"
+#include <string.h>
 
 // COLLECTIONS
 bvh_t ENTITY_BVH = {0};
 uint32_t AABB_IDS[MAX_ENTITIES];
 uint32_t BVH_COUNT;
+
+// HULL STUFF
+bvh_aabb MODEL_HULLS[512];
+
+void model_set_hull(uint32_t model_id, fastObjMesh *mesh) {
+  bvh_aabb hull = {};
+  for (uint32_t t = 0; t < mesh->position_count; t++) {
+    float *pos = &mesh->positions[t];
+    if (pos[0] < hull.min[0]) {
+      hull.min[0] = pos[0];
+    }
+    if (pos[1] < hull.min[1]) {
+      hull.min[1] = pos[1];
+    }
+    if (pos[2] < hull.min[2]) {
+      hull.min[2] = pos[2];
+    }
+    if (pos[0] > hull.max[0]) {
+      hull.max[0] = pos[0];
+    }
+    if (pos[1] > hull.max[1]) {
+      hull.max[1] = pos[1];
+    }
+    if (pos[2] > hull.max[2]) {
+      hull.max[2] = pos[2];
+    }
+  }
+  MODEL_HULLS[model_id] = hull;
+}
 
 void build_entity_bvh() {
   uint32_t collider_count = 0;
@@ -16,17 +47,28 @@ void build_entity_bvh() {
       collider_count++;
     }
   }
+  uint32_t i, collider_id;
   bvh_aabb prims[collider_count];
-  uint32_t collider_id = 0;
-  for (uint32_t i = 0; i < ENTITY_COUNT; i++) {
+  collider_id = 0;
+  for (i = 0; i < ENTITY_COUNT; i++) {
     if ((ENTITY_COLLIDER_GROUP[i] != 0) & !ENTITY_DEAD[i]) {
-      prims[collider_id].min[0] = ENTITY_TRANSFORM[i][3][0] - 2;
-      prims[collider_id].min[1] = ENTITY_TRANSFORM[i][3][1] - 2;
-      prims[collider_id].min[2] = ENTITY_TRANSFORM[i][3][2] - 2;
-      prims[collider_id].max[0] = ENTITY_TRANSFORM[i][3][0] + 2;
-      prims[collider_id].max[1] = ENTITY_TRANSFORM[i][3][1] + 2;
-      prims[collider_id].max[2] = ENTITY_TRANSFORM[i][3][2] + 2;
-      AABB_IDS[collider_id]     = i;
+      memcpy(&prims[collider_id], &MODEL_HULLS[ENTITY_MODEL[i]],
+             sizeof(bvh_aabb));
+      prims[collider_id].min[0] *= ENTITY_SCALE[i][0];
+      prims[collider_id].min[1] *= ENTITY_SCALE[i][1];
+      prims[collider_id].min[2] *= ENTITY_SCALE[i][2];
+      prims[collider_id].max[0] *= ENTITY_SCALE[i][0];
+      prims[collider_id].max[1] *= ENTITY_SCALE[i][1];
+      prims[collider_id].max[2] *= ENTITY_SCALE[i][2];
+
+      prims[collider_id].min[0] += ENTITY_TRANSFORM[i][3][0];
+      prims[collider_id].min[1] += ENTITY_TRANSFORM[i][3][1];
+      prims[collider_id].min[2] += ENTITY_TRANSFORM[i][3][2];
+      prims[collider_id].max[0] += ENTITY_TRANSFORM[i][3][0];
+      prims[collider_id].max[1] += ENTITY_TRANSFORM[i][3][1];
+      prims[collider_id].max[2] += ENTITY_TRANSFORM[i][3][2];
+
+      AABB_IDS[collider_id] = i;
 
       collider_id++;
     }
@@ -39,7 +81,6 @@ void build_entity_bvh() {
   }
   BVH_COUNT = collider_count;
 }
-
 
 void apply_vec_thrusters(float delta_time) {
   for (uint32_t ship = 0; ship < ENTITY_COUNT; ship++) {
@@ -64,8 +105,7 @@ void apply_vec_thrusters(float delta_time) {
 
 void apply_thrusters(float delta_time) {
   for (uint32_t ship = 0; ship < ENTITY_COUNT; ship++) {
-    if ((ENTITY_DEAD[ship] > 0) | (ENTITY_THRUST_POWER[ship] == -1) |
-        (ENTITY_TARGETS[ship] == -1)) {
+    if ((ENTITY_DEAD[ship] > 0) | (ENTITY_THRUST_POWER[ship] == -1)) {
       continue;
     }
 

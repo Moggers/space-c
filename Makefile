@@ -1,9 +1,10 @@
 CC = cc
-CFLAGS = -g -Wall  -O3
+CFLAGS = -g -Wall 
 LDFLAGS = -lSDL3 -lvulkan -lm
+BROWSER = vivaldi
 
 WIN_CC = x86_64-w64-mingw32-gcc
-WIN_CFLAGS = -Wall -O3
+WIN_CFLAGS = -Wall -fstack-protector
 WIN_LDFLAGS = -static -static-libgcc \
               -Wl,-Bstatic -lSDL3 \
               -lm -lkernel32 -luser32 -lgdi32 -lwinmm -limm32 \
@@ -12,9 +13,9 @@ WIN_LDFLAGS = -static -static-libgcc \
               -Wl,-Bdynamic -lvulkan-1 \
               -mwindows
 
-linux: bin/main bin/shaders/model_vertex.spv bin/shaders/fx_fragment.spv bin/shaders/fx_vertex.spv bin/shaders/model_fragment.spv bin/assets
+linux: bin/main bin/shaders/select.spv bin/shaders/model_vertex.spv bin/shaders/fx_fragment.spv bin/shaders/fx_vertex.spv bin/shaders/model_fragment.spv bin/shaders/ui_vertex.spv bin/shaders/ui_fragment.spv bin/assets
 
-windows: bin/main.exe bin/shaders/model_vertex.spv bin/shaders/fx_fragment.spv bin/shaders/fx_vertex.spv bin/shaders/model_fragment.spv bin/assets
+windows: bin/main.exe bin/shaders/model_vertex.spv bin/shaders/fx_fragment.spv bin/shaders/fx_vertex.spv bin/shaders/model_fragment.spv bin/shaders/ui_vertex.spv bin/shaders/ui_fragment.spv bin/assets
 
 bin/main: src/* | bin
 	$(CC) $(CFLAGS) -o $@ ./src/main.c $(LDFLAGS)
@@ -37,14 +38,31 @@ bin/shaders/fx_fragment.spv: src/shaders/fx.frag | bin
 bin/shaders/fx_vertex.spv: src/shaders/fx.vert | bin
 	glslc $< -o $@
 
+bin/shaders/ui_fragment.spv: src/shaders/ui.frag | bin
+	glslc $< -o $@
+
+bin/shaders/ui_vertex.spv: src/shaders/ui.vert | bin
+	glslc $< -o $@
+
+bin/shaders/select.spv: src/shaders/distinct.comp | bin
+	glslc $< -o $@
+
 bin/assets: assets | bin
 	cp -r assets bin/assets
+
+profile: export DEBUGINFOD_URLS=https://debuginfod.archlinux.org
+profile: export CFLAGS+=-fno-omit-frame-pointer
+profile: linux
+	cd ./bin && \
+	perf record --call-graph dwarf,16384 -F 99 ./main && \
+	perf script | inferno-collapse-perf | inferno-flamegraph > flamegraph.svg && \
+	$(BROWSER) ./flamegraph.svg
 
 bin:
 	mkdir -p bin bin/assets bin/shaders
 
 run: linux
-	cd ./bin && ./main
+	cd ./bin && mangohud ./main
 
 clean:
 	rm -rf bin

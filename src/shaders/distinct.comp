@@ -1,0 +1,28 @@
+#version 460
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_scalar_block_layout : require
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, r32i) uniform readonly iimage2D srcImage;
+
+layout(buffer_reference, scalar) buffer DistinctBuffer {
+  uint bits[];
+};
+
+layout(push_constant) uniform Push {
+  DistinctBuffer out_buffer;
+  ivec2 image_size;
+  uint max_id;
+} pc;
+
+void main() {
+  ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+  if (any(greaterThanEqual(coord, pc.image_size))) return;
+
+  int value = imageLoad(srcImage, coord).r;
+  if (value < 0 || uint(value) > pc.max_id) return;
+
+  uint id = uint(value);
+  atomicOr(pc.out_buffer.bits[id >> 5], 1u << (id & 31));
+}
