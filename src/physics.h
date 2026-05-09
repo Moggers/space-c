@@ -4,6 +4,7 @@
 #include "./entities.h"
 #include "./vendor/fast_obj.h"
 #include "vendor/cglm/cglm.h"
+#include "vendor/cglm/vec3.h"
 #include <string.h>
 
 // COLLECTIONS
@@ -105,7 +106,7 @@ void apply_vec_thrusters(float delta_time) {
 
 void apply_thrusters(float delta_time) {
   for (uint32_t ship = 0; ship < ENTITY_COUNT; ship++) {
-    if ((ENTITY_DEAD[ship] > 0) | (ENTITY_THRUST_POWER[ship] == -1)) {
+    if ((ENTITY_DEAD[ship] > 0) | (ENTITY_THRUST_POWER[ship][0] == -1)) {
       continue;
     }
 
@@ -129,16 +130,24 @@ void apply_thrusters(float delta_time) {
                             ENTITY_CURRENT_THRUST[ship][2] * delta_time};
 
     glm_vec3_add(ENTITY_INERTIA[ship], heading, ENTITY_INERTIA[ship]);
+    float newheadinglength =
+        glm_vec3_distance(ENTITY_INERTIA[ship], (vec3){0., 0., 0.});
+    float maxlen =
+        glm_vec3_distance(ENTITY_THRUST_POWER[ship], (vec3){0., 0., 0.});
+    glm_vec3_normalize(ENTITY_INERTIA[ship]);
+    glm_vec3_scale(ENTITY_INERTIA[ship], fmin(maxlen, newheadinglength),
+                   ENTITY_INERTIA[ship]);
+
+    if (ship == PLAYER_CONTROLLED_ENTITY) {
+      float inertialen =
+          glm_vec3_distance(ENTITY_INERTIA[ship], (vec3){0., 0., 0.});
+      printf("Inertialen %f\n", inertialen);
+    }
   }
 }
 
 void apply_movement(float delta_time) {
   for (uint32_t ship = 0; ship < ENTITY_COUNT; ship++) {
-    float len = glm_vec3_distance(ENTITY_INERTIA[ship], (vec3){0., 0., 0.});
-    len       = fmin(len, ENTITY_MAX_VEL[ship]);
-    glm_vec3_normalize(ENTITY_INERTIA[ship]);
-    glm_vec3_mul(ENTITY_INERTIA[ship], (vec3){len, len, len},
-                 ENTITY_INERTIA[ship]);
     ENTITY_TRANSFORM[ship][3][0] += ENTITY_INERTIA[ship][0] * delta_time;
     ENTITY_TRANSFORM[ship][3][1] += ENTITY_INERTIA[ship][1] * delta_time;
     ENTITY_TRANSFORM[ship][3][2] += ENTITY_INERTIA[ship][2] * delta_time;

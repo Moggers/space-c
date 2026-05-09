@@ -205,25 +205,30 @@ void ai_ship_thrusters() {
     // Main thruster
     vec3 modifedloc;
     glm_vec3_copy(ENTITY_TRANSFORM[ship][3], modifedloc);
-    glm_vec3_add(modifedloc, ENTITY_INERTIA[ship], modifedloc);
+    vec3 inmod;
+    glm_vec3_copy(ENTITY_INERTIA[ship], inmod);
+    glm_vec3_scale(inmod, 5, inmod);
+    glm_vec3_sub(modifedloc, ENTITY_INERTIA[ship], modifedloc);
     float cdist = glm_vec3_distance(modifedloc, ENTITY_TRANSFORM[target][3]);
 
     vec3 relpos;
     glm_vec3_sub(ENTITY_TRANSFORM[AI_TARGETS[ship]][3],
                  ENTITY_TRANSFORM[ship][3], relpos);
+    glm_vec3_sub(relpos, ENTITY_INERTIA[ship], relpos);
     glm_vec3_normalize(relpos);
-    float thingo = glm_vec3_dot(relpos, ENTITY_TRANSFORM[ship][2]);
-
-    printf("Dot %f\n", thingo);
 
     // Above zero if too far, below zero if too close
     float degree = cdist - AI_MAINTAIN_DIST[ship];
-    float thrust = fmax(fmin(degree, fabs(ENTITY_THRUST_POWER[ship])),
-                        -fabs(ENTITY_THRUST_POWER[ship])) *
-                   thingo;
-    printf("Thrust power %f\n", thrust);
+    float thrustx = fmax(fmin(degree, fabs(ENTITY_THRUST_POWER[ship][0])),
+                        -fabs(ENTITY_THRUST_POWER[ship][0])) *glm_vec3_dot(relpos, ENTITY_TRANSFORM[ship][0]);
+    float thrusty = fmax(fmin(degree, fabs(ENTITY_THRUST_POWER[ship][1])),
+                        -fabs(ENTITY_THRUST_POWER[ship][1])) *glm_vec3_dot(relpos, ENTITY_TRANSFORM[ship][1]);
+    float thrustz = fmax(fmin(degree, fabs(ENTITY_THRUST_POWER[ship][2])),
+                        -fabs(ENTITY_THRUST_POWER[ship][2])) *glm_vec3_dot(relpos, ENTITY_TRANSFORM[ship][2]);
 
-    ENTITY_CURRENT_THRUST[ship][2] = thrust;
+    ENTITY_CURRENT_THRUST[ship][0] = thrustx;
+    ENTITY_CURRENT_THRUST[ship][1] = thrusty;
+    ENTITY_CURRENT_THRUST[ship][2] = thrustz;
   }
 }
 

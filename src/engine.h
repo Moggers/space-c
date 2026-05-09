@@ -19,16 +19,15 @@ float FX_MAX_T[MAX_FX];
 uint32_t FX_COUNT = 0;
 
 uint32_t make_entity(mat4 transform, uint32_t faction, vec3 col,
-                     float vec_thrust, float thrust, uint32_t model_id,
+                     float vec_thrust, vec3 thrust, uint32_t model_id,
                      char *name) {
   glm_mat4_identity(ENTITY_TRANSFORM[ENTITY_COUNT]);
   glm_mat4_copy(transform, ENTITY_TRANSFORM[ENTITY_COUNT]);
-  ENTITY_MODEL[ENTITY_COUNT]                 = model_id;
-  ENTITY_FACTION[ENTITY_COUNT]               = faction;
-  ENTITY_VEC_THRUST[ENTITY_COUNT]            = vec_thrust;
-  ENTITY_THRUST_POWER[ENTITY_COUNT]          = thrust;
-  ENTITY_MAX_VEL[ENTITY_COUNT]               = thrust;
-  AI_TARGETS[ENTITY_COUNT]               = -1;
+  ENTITY_MODEL[ENTITY_COUNT]      = model_id;
+  ENTITY_FACTION[ENTITY_COUNT]    = faction;
+  ENTITY_VEC_THRUST[ENTITY_COUNT] = vec_thrust;
+  glm_vec3_copy(thrust, ENTITY_THRUST_POWER[ENTITY_COUNT]);
+  AI_TARGETS[ENTITY_COUNT]                   = -1;
   ENTITY_CURRENT_THRUST[ENTITY_COUNT][0]     = 0;
   ENTITY_CURRENT_THRUST[ENTITY_COUNT][1]     = 0;
   ENTITY_CURRENT_THRUST[ENTITY_COUNT][2]     = 0;
@@ -103,7 +102,7 @@ void ondeath_split(uint32_t entityId) {
   ENTITY_SCALE[entityId][2] /= 2;
   ENTITY_MAXHEALTH[entityId] /= 2;
   ENTITY_HEALTH[entityId] = ENTITY_MAXHEALTH[entityId];
-  uint32_t firstNew = entity_copy(entityId);
+  uint32_t firstNew       = entity_copy(entityId);
   ENTITY_TRANSFORM[entityId][3][0] -= randoffset[0];
   ENTITY_TRANSFORM[entityId][3][1] -= randoffset[1];
   ENTITY_TRANSFORM[entityId][3][2] -= randoffset[2];
@@ -194,14 +193,13 @@ void fire_guns(float delta_time) {
       } else if (GUN_ACTIVE[ship] == 1) {
         GUN_RELOAD[ship] = GUN_RELOAD_TIME[ship];
         uint32_t bullet =
-            make_entity(ENTITY_TRANSFORM[ship], -1, (vec3){1., 0., 0.}, 0, 0,
-                        GUN_MODEL[ship], "Bullet");
+            make_entity(ENTITY_TRANSFORM[ship], -1, (vec3){1., 0., 0.}, 0,
+                        (vec3){-1., -1., -1.}, GUN_MODEL[ship], "Bullet");
         vec3 inertia = {0, 0, GUN_SPEED[ship]};
         glm_mat4_mulv3(ENTITY_TRANSFORM[ship], inertia, 0., inertia);
         glm_vec3_copy(inertia, ENTITY_INERTIA[bullet]);
         glm_translate(ENTITY_TRANSFORM[bullet],
                       (vec3){0., 0., GUN_SPEED[ship] * 0.01});
-        ENTITY_MAX_VEL[bullet]        = 1000.;
         ENTITY_SCALE[bullet][0]       = 0.1;
         ENTITY_SCALE[bullet][1]       = 0.1;
         ENTITY_SCALE[bullet][2]       = GUN_SPEED[ship] * 0.005;

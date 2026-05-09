@@ -67,8 +67,9 @@ int main(int argc, char *argv[]) {
   // Asteroid
   glm_mat4_identity(spawn_location);
   glm_translate(spawn_location, (vec3){1000, -200, 0});
-  uint32_t asteroid = make_entity(spawn_location, 0, (vec3){0.3, 0.3, 0.3}, 0,
-                                  0, asteroid_model, "Asteroid");
+  uint32_t asteroid =
+      make_entity(spawn_location, 0, (vec3){0.3, 0.3, 0.3}, 0,
+                  (vec3){-1, -1, -1}, asteroid_model, "Asteroid");
   entity_set_ondeath(asteroid, ONDEATH_SPLIT);
   entity_set_health(asteroid, 100);
   entity_set_scale(asteroid, (vec3){64, 64, 64});
@@ -78,8 +79,8 @@ int main(int argc, char *argv[]) {
   glm_mat4_identity(spawn_location);
   glm_translate(spawn_location, (vec3){0, 0, 0});
   uint32_t player_ship =
-      make_entity(spawn_location, player_faction, (vec3){0., 1., 0.}, 1, 100,
-                  ship_model, "Player Ship");
+      make_entity(spawn_location, player_faction, (vec3){0., 1., 0.}, 1,
+                  (vec3){20, 20, 100}, ship_model, "Player Ship");
   give_gun(player_ship, 1000, 0.2, ship_model);
   entity_set_ondeath(player_ship, ONDEATH_EXPLODE);
   entity_set_health(player_ship, 5);
@@ -89,8 +90,8 @@ int main(int argc, char *argv[]) {
   glm_mat4_identity(spawn_location);
   glm_translate(spawn_location, (vec3){0, 0, 300});
   uint32_t station_a =
-      make_entity(spawn_location, mining_faction, (vec3){0., 1., 0.}, -1, -1,
-                  station_model, "Statio A");
+      make_entity(spawn_location, mining_faction, (vec3){0., 1., 0.}, -1,
+                  (vec3){-1, -1, -1}, station_model, "Statio A");
   entity_set_health(station_a, 100);
   entity_set_ondeath(station_a, ONDEATH_EXPLODE);
   contract_add(station_a, CONTRACT_ORE, "Deliver Ore", 100);
@@ -106,8 +107,8 @@ int main(int argc, char *argv[]) {
   glm_mat4_copy(ENTITY_TRANSFORM[station_a], spawn_location);
   glm_translate(spawn_location, offset);
   uint32_t new_ship =
-      make_entity(spawn_location, mining_faction, ENTITY_COLORS[station_a], 1,
-                  100, ship_model, "AI Ship");
+      make_entity(spawn_location, mining_faction, ENTITY_COLORS[station_a], 2,
+                  (vec3){20, 20, 100}, ship_model, "AI Ship");
   give_gun(new_ship, 1000, 0.2, ship_model);
 
   // Timings
@@ -212,8 +213,8 @@ int main(int argc, char *argv[]) {
     }
 
     if (ENTITY_DEAD[PLAYER_CONTROLLED_ENTITY] > 2) {
-      player_ship = make_entity(spawn_location, 1, (vec3){0., 1., 0.}, 1, 100,
-                                ship_model, "Player Ship");
+      player_ship = make_entity(spawn_location, 1, (vec3){0., 1., 0.}, 1,
+                                (vec3){0, 0, 100}, ship_model, "Player Ship");
       give_gun(player_ship, 1000, 0.2, ship_model);
       PLAYER_CONTROLLED_ENTITY = player_ship;
     }
@@ -271,18 +272,14 @@ int main(int argc, char *argv[]) {
           (keys[SDL_SCANCODE_A] - keys[SDL_SCANCODE_D]) *
           ENTITY_VEC_THRUST[PLAYER_CONTROLLED_ENTITY];
       ENTITY_CURRENT_THRUST[PLAYER_CONTROLLED_ENTITY][2] =
-          ENTITY_THRUST_POWER[PLAYER_CONTROLLED_ENTITY] *
+          ENTITY_THRUST_POWER[PLAYER_CONTROLLED_ENTITY][2] *
           (keys[SDL_SCANCODE_W] - keys[SDL_SCANCODE_S]);
       ENTITY_CURRENT_THRUST[PLAYER_CONTROLLED_ENTITY][0] =
-          ENTITY_THRUST_POWER[PLAYER_CONTROLLED_ENTITY] / 4 *
-              keys[SDL_SCANCODE_E] -
-          ENTITY_THRUST_POWER[PLAYER_CONTROLLED_ENTITY] / 4 *
-              keys[SDL_SCANCODE_Q];
+          ENTITY_THRUST_POWER[PLAYER_CONTROLLED_ENTITY][0] *
+          (keys[SDL_SCANCODE_E] - keys[SDL_SCANCODE_Q]);
       ENTITY_CURRENT_THRUST[PLAYER_CONTROLLED_ENTITY][1] =
-          ENTITY_THRUST_POWER[PLAYER_CONTROLLED_ENTITY] / 4 *
-              keys[SDL_SCANCODE_X] -
-          ENTITY_THRUST_POWER[PLAYER_CONTROLLED_ENTITY] / 4 *
-              keys[SDL_SCANCODE_Z];
+          ENTITY_THRUST_POWER[PLAYER_CONTROLLED_ENTITY][1] *
+          (keys[SDL_SCANCODE_X] - keys[SDL_SCANCODE_Z]);
       glm_mat4_copy(ENTITY_TRANSFORM[PLAYER_CONTROLLED_ENTITY],
                     GAME_CAM_TRANSFORM);
       glm_translate(GAME_CAM_TRANSFORM, (vec3){0., 4., -10.});
