@@ -82,7 +82,7 @@ int main(int argc, char *argv[]) {
   PLAYER_CONTROLLED_ENTITY =
       make_entity(spawn_location, player_faction, (vec3){0., 1., 0.}, 1,
                   (vec3){20, 20, 100}, ship_model, "Player Ship");
-  give_gun(PLAYER_CONTROLLED_ENTITY, 1000, 0.2, ship_model);
+  give_gun(PLAYER_CONTROLLED_ENTITY, 1000, 0.2, ship_model, 1);
   entity_set_ondeath(PLAYER_CONTROLLED_ENTITY, ONDEATH_EXPLODE);
   entity_set_health(PLAYER_CONTROLLED_ENTITY, 5);
   //
@@ -103,7 +103,7 @@ int main(int argc, char *argv[]) {
   uint32_t new_ship =
       make_entity(spawn_location, mining_faction, ENTITY_COLORS[station_a], 1,
                   (vec3){20, 20, 100}, ship_model, "AI Ship");
-  give_gun(new_ship, 1000, 0.2, ship_model);
+  give_gun(new_ship, 1000, 0.2, ship_model, 1);
   entity_set_ondeath(new_ship, ONDEATH_EXPLODE);
   entity_set_health(new_ship, 5);
 
@@ -214,7 +214,7 @@ int main(int argc, char *argv[]) {
       PLAYER_CONTROLLED_ENTITY =
           make_entity(spawn_location, player_faction, (vec3){0., 1., 0.}, 1,
                       (vec3){20, 20, 100}, ship_model, "Player Ship");
-      give_gun(PLAYER_CONTROLLED_ENTITY, 1000, 0.2, ship_model);
+      give_gun(PLAYER_CONTROLLED_ENTITY, 1000, 0.2, ship_model, 1);
       entity_set_ondeath(PLAYER_CONTROLLED_ENTITY, ONDEATH_EXPLODE);
       entity_set_health(PLAYER_CONTROLLED_ENTITY, 5);
     }

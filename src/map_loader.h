@@ -175,6 +175,14 @@ void map_free(map_t* m);
  * key is absent. The returned pointer is valid until map_free. */
 const char* map_entity_get(const map_entity* e, const char* key);
 
+/* Typed accessors over map_entity_get. Each returns `def` (or 0 for
+ * vec3) when the key is missing or unparseable. The vec3 form reads
+ * three whitespace-separated floats, matching how TrenchBroom writes
+ * "origin" and similar fields. */
+int   map_entity_get_int  (const map_entity* e, const char* key, int def);
+float map_entity_get_float(const map_entity* e, const char* key, float def);
+int   map_entity_get_vec3 (const map_entity* e, const char* key, float out[3]);
+
 /* Sentinel: store in pos[0] (resp. norm[0]) to skip that attribute. */
 #define MAP_NO_OFFSET ((size_t)-1)
 
@@ -808,6 +816,36 @@ const char* map_entity_get(const map_entity* e, const char* key) {
         if (e->keys[i] && strcmp(e->keys[i], key) == 0) return e->values[i];
     }
     return NULL;
+}
+
+int map_entity_get_int(const map_entity* e, const char* key, int def) {
+    const char* v = map_entity_get(e, key);
+    if (!v) return def;
+    char* endp = NULL;
+    long n = strtol(v, &endp, 10);
+    return endp == v ? def : (int)n;
+}
+
+float map_entity_get_float(const map_entity* e, const char* key, float def) {
+    const char* v = map_entity_get(e, key);
+    if (!v) return def;
+    char* endp = NULL;
+    float f = strtof(v, &endp);
+    return endp == v ? def : f;
+}
+
+int map_entity_get_vec3(const map_entity* e, const char* key, float out[3]) {
+    const char* v = map_entity_get(e, key);
+    if (!v) return 0;
+    char* p = (char*)v;
+    for (int i = 0; i < 3; ++i) {
+        char* endp = NULL;
+        float f = strtof(p, &endp);
+        if (endp == p) return 0;
+        out[i] = f;
+        p = endp;
+    }
+    return 1;
 }
 
 int map_brush_triangulate(const map_brush* b,

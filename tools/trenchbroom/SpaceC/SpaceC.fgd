@@ -1,0 +1,8 @@
+@SolidClass = worldspawn : "World" []
+
+@SolidClass color(0 200 200) = func_example: "Example" []
+
+@PointClass size(-16 -16 0, 16 16 2) color(255 255 0) = info_landingpad: "Location where ships can land"
+[
+    normal(string) : "Direction of landing pad" : "0 1 0"
+]

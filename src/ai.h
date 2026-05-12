@@ -5,17 +5,21 @@
 #include "./entities.h"
 #include "./faction.h"
 #include "bvh.h"
+#include "map_loader.h"
 #include "physics.h"
+#include "vendor/cglm/mat4.h"
 #include "vendor/cglm/vec3.h"
 #include <string.h>
 #include <vulkan/vulkan_core.h>
 
 #define AIM_KILL 1
 #define AIM_COLLECT 2
+#define AIM_DELIVER 3
 
 float AI_MAINTAIN_DIST[MAX_ENTITIES];
 uint32_t AI_TARGETS[MAX_ENTITIES];
 uint32_t AI_MODE[MAX_ENTITIES];
+vec3 AI_NAVIGATE_TO[MAX_ENTITIES];
 
 int ai_contract_suitable(uint32_t entity, uint32_t contract) {
 
@@ -71,7 +75,6 @@ int target_asteroid_cb(uint32_t prim_index, bvh_closest *closest, void *user) {
   uint32_t shipId = *(uint32_t *)user;
   uint32_t targId = AABB_IDS[prim_index];
   if (ENTITY_IS_ASTEROID[targId]) {
-    printf("Found asteroid\n");
     if (ENTITY_SCALE[targId][0] <= ENTITY_SCALE[shipId][0]) {
       AI_TARGETS[shipId] = targId;
       return 1;
@@ -94,6 +97,42 @@ void ai_ship_select_tasks() {
       uint32_t contract = ENTITY_ACCEPTED_CONTRACT[ship];
       switch (CONTRACT_TYPE[contract]) {
       case CONTRACT_ORE: {
+
+        // Do we already have the shit we need
+        for (uint32_t k = 0; k < INVENTORY_SLOTS; k++) {
+          if (ENTITY_INVENTORY_COUNT[ship][k] <= CONTRACT_AMOUNT[contract] &&
+              ENTITY_INVENTORY_ITEMS[ship][k] == ItemOre) {
+            AI_TARGETS[ship] = CONTRACT_ISSUING_ENTITY[contract];
+            AI_MODE[ship]    = AIM_DELIVER;
+            uint32_t model   = ENTITY_MODEL[AI_TARGETS[ship]];
+            map_t *map       = MODEL_MAP[model];
+            map_entity *entity;
+            for (uint32_t enti = 0; enti < map->entity_count; enti++) {
+              entity                = &map->entities[enti];
+              const char *classname = map_entity_get(entity, "classname");
+              if (strcmp(classname, "info_landingpad") == 0) {
+                printf("Found a landingpad!\n");
+                vec3 landingpadloc, landingpadnorm;
+                map_entity_get_vec3(entity, "origin", landingpadloc);
+                map_entity_get_vec3(entity, "normal", landingpadnorm);
+                // TODO: This scale should probably be based on the size of the
+                // ship
+                glm_vec3_scale(landingpadnorm, 5, landingpadnorm);
+                glm_vec3_add(landingpadnorm, landingpadloc, landingpadloc);
+                glm_mat4_mulv3(ENTITY_TRANSFORM[AI_TARGETS[ship]],
+                               landingpadloc, 1, landingpadloc);
+                glm_vec3_copy(landingpadloc, AI_NAVIGATE_TO[ship]);
+              }
+            }
+            break;
+          }
+        }
+
+        if (AI_MODE[ship] == AIM_DELIVER) {
+          continue;
+        }
+        // Go find it
+        AI_TARGETS[ship] = -1;
         bvh_closest_query(
             &ENTITY_BVH,
             &(bvh_closest){.point       = {ENTITY_TRANSFORM[ship][3][0],
@@ -102,9 +141,17 @@ void ai_ship_select_tasks() {
                            .max_dist_sq = 9999999},
             target_asteroid_cb, &ship);
         if (AI_TARGETS[ship] != -1) {
+          uint32_t target = AI_TARGETS[ship];
+          // Get target location
+          glm_vec3_copy(ENTITY_TRANSFORM[target][3], AI_NAVIGATE_TO[ship]);
+          // Add inertia of the target
+          glm_vec3_add(ENTITY_INERTIA[target], AI_NAVIGATE_TO[ship],
+                       AI_NAVIGATE_TO[ship]);
+          // Add the maintained distance
           if (ENTITY_SCALE[ship][0] >= ENTITY_SCALE[AI_TARGETS[ship]][0]) {
-            AI_MODE[ship]          = AIM_COLLECT;
-            AI_MAINTAIN_DIST[ship] = ENTITY_SCALE[ship][0];
+            ENTITY_COLLECTING[ship] = AI_TARGETS[ship];
+            AI_MODE[ship]           = AIM_COLLECT;
+            AI_MAINTAIN_DIST[ship]  = ENTITY_SCALE[ship][0];
           } else {
             AI_MODE[ship]    = AIM_KILL;
             float *targscale = ENTITY_SCALE[AI_TARGETS[ship]];
@@ -200,9 +247,13 @@ void ai_ship_thrusters() {
     mat4 inv;
     glm_mat4_inv(ENTITY_TRANSFORM[ship], inv);
 
+    // Get target location
+    vec3 rel_target_location;
+    glm_vec3_copy(AI_NAVIGATE_TO[ship], rel_target_location);
+
     // Get raw target location relative to ship coordinates normalized
     vec3 target_heading;
-    glm_mat4_mulv3(inv, ENTITY_TRANSFORM[target][3], 1, target_heading);
+    glm_mat4_mulv3(inv, rel_target_location, 1, target_heading);
     glm_vec3_normalize(target_heading);
     ENTITY_CURRENT_VEC_THRUST[ship][0] =
         glm_clamp(-target_heading[1] * 5, -ENTITY_VEC_THRUST[ship],
@@ -214,12 +265,9 @@ void ai_ship_thrusters() {
         glm_clamp(target_heading[0] * 5, -ENTITY_VEC_THRUST[ship],
                   ENTITY_VEC_THRUST[ship]);
 
-    // Get target location
-    vec3 rel_target_location;
-    glm_vec3_copy(ENTITY_TRANSFORM[target][3], rel_target_location);
     // Add the maintained distance
     vec3 backheading;
-    glm_vec3_sub(ENTITY_TRANSFORM[ship][3], ENTITY_TRANSFORM[target][3],
+    glm_vec3_sub(ENTITY_TRANSFORM[ship][3], rel_target_location,
                  backheading);
     glm_vec3_normalize(backheading);
     glm_vec3_scale(backheading, AI_MAINTAIN_DIST[ship], backheading);

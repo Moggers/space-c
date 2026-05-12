@@ -47,8 +47,10 @@ uint32_t make_entity(mat4 transform, uint32_t faction, vec3 col,
   return ENTITY_COUNT++;
 }
 
-void give_gun(uint32_t ship, float speed, float reload_time, uint32_t model) {
+void give_gun(uint32_t ship, float speed, float reload_time, uint32_t model,
+              uint32_t damage) {
   GUN_MODEL[ship]       = model;
+  GUN_DAMAGE[ship]      = damage;
   GUN_SPEED[ship]       = speed;
   GUN_RELOAD_TIME[ship] = reload_time;
   GUN_ACTIVE[ship]      = 0;
@@ -128,8 +130,11 @@ void ondeath_split(uint32_t entityId, uint32_t splitter) {
   ENTITY_HEALTH[firstNew]    = damage;
 }
 
-void damage_entity(uint32_t entityId, uint32_t damaging_entityId) {
-  uint32_t damage = ENTITY_MAXHEALTH[damaging_entityId];
+uint32_t damage_entity(uint32_t entityId, uint32_t damaging_entityId) {
+  uint32_t damage = ENTITY_DAMAGE[damaging_entityId] + ENTITY_DAMAGE[entityId];
+  if (damage == 0) {
+    return 0;
+  }
   ENTITY_HEALTH[entityId] -= damage;
   if (ENTITY_HEALTH[entityId] <= 0) {
     switch (ENTITY_ONDEATH[entityId]) {
@@ -143,11 +148,12 @@ void damage_entity(uint32_t entityId, uint32_t damaging_entityId) {
       break;
     }
     }
-    return;
+    return damage;
   }
   if (ENTITY_ONDEATH[entityId] == ONDEATH_SPLIT) {
     ondeath_split(entityId, damaging_entityId);
   }
+  return damage;
 }
 
 typedef struct subcollision_userdata {
@@ -158,6 +164,8 @@ typedef struct subcollision_userdata {
 } subcollision_userdata;
 int handle_subcollision(uint32_t prim_index, void *user) {
   subcollision_userdata *subcol = user;
+  uint32_t entity_a             = subcol->a_entityid;
+  uint32_t entity_b             = subcol->b_entityid;
   // One or the other entity may actually have already been deleted by a
   // previous collision
   if (!ENTITY_MODEL[subcol->b_entityid] | !ENTITY_MODEL[subcol->a_entityid]) {
@@ -168,6 +176,9 @@ int handle_subcollision(uint32_t prim_index, void *user) {
   const map_brush *brush = &map_b->entities[0].brushes[prim_index];
   mat4 inv;
   glm_mat4_inv(ENTITY_TRANSFORM[subcol->b_entityid], inv);
+  int32_t closest_face = -1;
+  float largest_dot   = 99999;
+  vec3 relvert_closest_face;
   for (uint32_t t = 0; t < map_a->entity_count; t++) {
     for (uint32_t i = 0; i < map_a->entities[t].brush_count; i++) {
       for (uint32_t k = 0; k < map_a->entities[t].brushes[i].vertex_count;
@@ -181,7 +192,10 @@ int handle_subcollision(uint32_t prim_index, void *user) {
         glm_vec3_div(vert, ENTITY_SCALE[subcol->b_entityid], vert);
 
         // Check each face of brush B
-        uint32_t missed_something = 0;
+        uint32_t missed_something  = 0;
+        int32_t inner_closest_face = -1;
+        float inner_least_mag_dot   = -99999;
+        vec3 inner_relvert_closest_face;
         for (uint32_t j = 0; j < brush->face_count; j++) {
           map_face *face = &brush->faces[j];
           // Get the heading from the first vertex of the face B being checked
@@ -194,25 +208,48 @@ int handle_subcollision(uint32_t prim_index, void *user) {
           // to the plane B's first vert) and the normal of the plane B is >0
           // then vertex A is in front of face B, meaning we must not be inside
           // the brush B
-          if (glm_vec3_dot(face->normal, relvert) > 0) {
+          float dot = glm_vec3_dot(face->normal, relvert);
+          if (dot < 0 && dot > inner_least_mag_dot) {
+            inner_closest_face = j;
+            inner_least_mag_dot = dot;
+            glm_vec3_copy(relvert, inner_relvert_closest_face);
+          }
+          if (dot > 0) {
             missed_something = 1;
             break;
           }
         }
         // If we were behind all the planes, we are inside the brush.
         if (!missed_something) {
-          uint32_t entity_a = subcol->a_entityid;
-          uint32_t entity_b = subcol->b_entityid;
 
-          if (ENTITY_HEALTH[entity_b] <= 0 || ENTITY_HEALTH[entity_a] <= 0) {
-            return 0;
+          // Identify if this is the deepest vertex so far, if it is, note down said dot and norm so we can shunt out later
+          if (inner_least_mag_dot < largest_dot) {
+            closest_face = inner_closest_face;
+            largest_dot = inner_least_mag_dot;
+            glm_vec3_copy(inner_relvert_closest_face, relvert_closest_face);
           }
-
-          damage_entity(entity_b, entity_a);
-          damage_entity(entity_a, entity_b);
         }
       }
     }
+  }
+
+  // Are any of our vertices behind a brush?
+  if (closest_face != -1) {
+    // Do damage
+    if (ENTITY_HEALTH[entity_b] <= 0 || ENTITY_HEALTH[entity_a] <= 0) {
+      return 0;
+    }
+    damage_entity(entity_b, entity_a);
+    damage_entity(entity_a, entity_b);
+    // Push out based on the dot and norm of the deepest vert and the face that vert was closest to
+    vec3 shuntnorm;
+    // Get the normal of the face we were closest to the front of
+    glm_vec3_copy(brush->faces[closest_face].normal, shuntnorm);
+    glm_vec3_scale(shuntnorm, largest_dot, shuntnorm);
+    glm_vec3_sub(ENTITY_TRANSFORM[entity_a][3], shuntnorm,
+                 ENTITY_TRANSFORM[entity_a][3]);
+    glm_vec3_scale(ENTITY_INERTIA[entity_a], 1 + largest_dot,
+                   ENTITY_INERTIA[entity_a]);
   }
   return 0;
 }
@@ -320,13 +357,55 @@ void fire_guns(float delta_time) {
         glm_vec3_copy(inertia, ENTITY_INERTIA[bullet]);
         glm_translate(ENTITY_TRANSFORM[bullet],
                       (vec3){0., 0., GUN_SPEED[ship] * 0.01});
-        ENTITY_SCALE[bullet][0]       = 0.1;
-        ENTITY_SCALE[bullet][1]       = 0.1;
+        ENTITY_SCALE[bullet][0]       = 0.1 * GUN_DAMAGE[ship];
+        ENTITY_SCALE[bullet][1]       = 0.1 * GUN_DAMAGE[ship];
         ENTITY_SCALE[bullet][2]       = GUN_SPEED[ship] * 0.005;
+        ENTITY_DAMAGE[bullet]         = GUN_DAMAGE[ship];
         ENTITY_COLLIDER_GROUP[bullet] = 1;
         entity_set_ondeath(bullet, ONDEATH_DELETE);
         entity_set_health(bullet, 1);
       }
+    }
+  }
+}
+
+void collect_items() {
+  for (uint32_t ship = 0; ship < ENTITY_COUNT; ship++) {
+    uint32_t inventory_slot = 0;
+    if (ENTITY_COLLECTING[ship]) {
+      uint32_t ecollecting = ENTITY_COLLECTING[ship];
+      // Find an empty inventory slot
+      for (inventory_slot = 0; inventory_slot < INVENTORY_SLOTS;
+           inventory_slot++) {
+        if (ENTITY_INVENTORY_COUNT[ship][inventory_slot] == 0 ||
+            ENTITY_INVENTORY_ITEMS[ship][inventory_slot] == ItemOre &&
+                ENTITY_IS_ASTEROID[ecollecting]) {
+          break;
+        }
+      }
+
+      // Inventory full, cancel
+      if (inventory_slot == 32) {
+        ENTITY_COLLECTING[ship] = 0;
+        continue;
+      }
+
+      // If close enough
+      float shipsize = (ENTITY_SCALE[ship][0] * ENTITY_SCALE[ship][1] *
+                        ENTITY_SCALE[ship][2]) *
+                       10;
+      if (glm_vec3_distance(ENTITY_TRANSFORM[ship][3],
+                            ENTITY_TRANSFORM[ecollecting][3]) < shipsize) {
+        if (ENTITY_IS_ASTEROID[ecollecting]) {
+          float itemscale =
+              (ENTITY_SCALE[ecollecting][0] * ENTITY_SCALE[ecollecting][1] *
+               ENTITY_SCALE[ecollecting][2]);
+          ENTITY_INVENTORY_COUNT[ship][inventory_slot] += itemscale;
+          ENTITY_INVENTORY_ITEMS[ship][inventory_slot] = ItemOre;
+          ondeath_delete(ecollecting);
+        }
+      }
+      ENTITY_COLLECTING[ship] = 0;
     }
   }
 }
@@ -349,7 +428,8 @@ void sim_loop(float delta_time) {
   apply_movement(delta_time);
   do_collisions();
 
-  // Guns
+  // Ship activities
+  collect_items();
   fire_guns(delta_time);
   death_animations(delta_time);
 
