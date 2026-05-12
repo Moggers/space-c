@@ -1,20 +1,22 @@
-#include "contracts.h"
-#include "entities.h"
-#include "vendor/cglm/affine-pre.h"
-#include <SDL3/SDL_events.h>
+#define MAP_LOADER_IMPLEMENTATION
+#define MAP_WINDING_CCW
+#include "./map_loader.h"
 #define BVH_IMPLEMENTATION
 #include "./bvh.h"
+
+#include "contracts.h"
+#include "entities.h"
 #include "physics.h"
+#include "vendor/cglm/affine-pre.h"
 #include "vendor/cglm/mat4.h"
 #include <SDL3/SDL.h>
+#include <SDL3/SDL_events.h>
 #include <SDL3/SDL_keycode.h>
 #include <SDL3/SDL_mouse.h>
 #include <SDL3/SDL_scancode.h>
 #include <SDL3/SDL_video.h>
 #include <assert.h>
 #include <inttypes.h>
-#include <stdlib.h>
-#include <string.h>
 #include <sys/types.h>
 #include <time.h>
 #include <vulkan/vulkan_core.h>
@@ -26,9 +28,6 @@
 #include "./vlk_nk.h"
 #include "engine.h"
 #include "vendor/cglm/vec3.h"
-
-#define FAST_OBJ_IMPLEMENTATION
-#include "./vendor/fast_obj.h"
 
 #define FREECAM 0
 
@@ -48,15 +47,17 @@ int main(int argc, char *argv[]) {
   vlk_createPipelines();
   UI_CTX = vlk_nk_init();
 
-  fastObjMesh *ship_mesh     = fast_obj_read("./assets/ship.obj");
-  fastObjMesh *station_mesh  = fast_obj_read("./assets/station.obj");
-  fastObjMesh *asteroid_mesh = fast_obj_read("./assets/asteroid.obj");
-  uint32_t ship_model        = load_model(ship_mesh);
-  uint32_t station_model     = load_model(station_mesh);
-  uint32_t asteroid_model    = load_model(asteroid_mesh);
-  model_set_hull(ship_model, ship_mesh);
-  model_set_hull(station_model, station_mesh);
-  model_set_hull(asteroid_model, asteroid_mesh);
+  map_t asteroid_map, ship_map, station_map;
+  map_load(&asteroid_map, "./assets/asteroid.map");
+  map_load(&station_map, "./assets/station.map");
+  map_load(&ship_map, "./assets/ship.map");
+
+  uint32_t ship_model     = load_model(&ship_map);
+  uint32_t station_model  = load_model(&station_map);
+  uint32_t asteroid_model = load_model(&asteroid_map);
+  model_set_bvh(ship_model, &ship_map);
+  model_set_bvh(station_model, &station_map);
+  model_set_bvh(asteroid_model, &asteroid_map);
 
   mat4 spawn_location;
 
@@ -66,7 +67,7 @@ int main(int argc, char *argv[]) {
 
   // Asteroid
   glm_mat4_identity(spawn_location);
-  glm_translate(spawn_location, (vec3){1000, -200, 0});
+  glm_translate(spawn_location, (vec3){500, 0, 0});
   uint32_t asteroid =
       make_entity(spawn_location, 0, (vec3){0.3, 0.3, 0.3}, 0,
                   (vec3){-1, -1, -1}, asteroid_model, "Asteroid");
@@ -77,43 +78,37 @@ int main(int argc, char *argv[]) {
 
   // Player
   glm_mat4_identity(spawn_location);
-  glm_translate(spawn_location, (vec3){0, 0, 0});
-  uint32_t player_ship =
+  glm_translate(spawn_location, (vec3){500, 100, -200});
+  PLAYER_CONTROLLED_ENTITY =
       make_entity(spawn_location, player_faction, (vec3){0., 1., 0.}, 1,
                   (vec3){20, 20, 100}, ship_model, "Player Ship");
-  give_gun(player_ship, 1000, 0.2, ship_model);
-  entity_set_ondeath(player_ship, ONDEATH_EXPLODE);
-  entity_set_health(player_ship, 5);
-  PLAYER_CONTROLLED_ENTITY = player_ship;
+  give_gun(PLAYER_CONTROLLED_ENTITY, 1000, 0.2, ship_model);
+  entity_set_ondeath(PLAYER_CONTROLLED_ENTITY, ONDEATH_EXPLODE);
+  entity_set_health(PLAYER_CONTROLLED_ENTITY, 5);
   //
   // First station
   glm_mat4_identity(spawn_location);
-  glm_translate(spawn_location, (vec3){0, 0, 300});
+  glm_translate(spawn_location, (vec3){0, 0, 0});
   uint32_t station_a =
       make_entity(spawn_location, mining_faction, (vec3){0., 1., 0.}, -1,
                   (vec3){-1, -1, -1}, station_model, "Statio A");
-  entity_set_health(station_a, 100);
+  entity_set_health(station_a, 10000);
   entity_set_ondeath(station_a, ONDEATH_EXPLODE);
-  contract_add(station_a, CONTRACT_ORE, "Deliver Ore", 100);
+  entity_set_scale(station_a, (vec3){1., 1., 1.});
+  contract_add(station_a, CONTRACT_ORE, "Deliver Ore", 1);
 
   // Rando AI ship
-  printf("Spawning ship\n");
-  mat4 rotation;
-  glm_mat4_copy(ENTITY_TRANSFORM[station_a], rotation);
-  glm_vec4_zero(rotation[3]);
-  vec3 offset = {0., 500, 0};
-  glm_mat4_mulv3(rotation, offset, 1, offset);
-  glm_vec3_add(offset, ENTITY_TRANSFORM[station_a][3], offset);
-  glm_mat4_copy(ENTITY_TRANSFORM[station_a], spawn_location);
-  glm_translate(spawn_location, offset);
+  glm_mat4_identity(spawn_location);
+  glm_translate(spawn_location, (vec3){500, 200, -200});
   uint32_t new_ship =
-      make_entity(spawn_location, mining_faction, ENTITY_COLORS[station_a], 2,
+      make_entity(spawn_location, mining_faction, ENTITY_COLORS[station_a], 1,
                   (vec3){20, 20, 100}, ship_model, "AI Ship");
   give_gun(new_ship, 1000, 0.2, ship_model);
+  entity_set_ondeath(new_ship, ONDEATH_EXPLODE);
+  entity_set_health(new_ship, 5);
 
   // Timings
   float time;
-  float time_since_last_spawn = 0;
 
   while (!done) {
     // EVENTS
@@ -213,36 +208,15 @@ int main(int argc, char *argv[]) {
     }
 
     if (ENTITY_DEAD[PLAYER_CONTROLLED_ENTITY] > 2) {
-      player_ship = make_entity(spawn_location, 1, (vec3){0., 1., 0.}, 1,
-                                (vec3){0, 0, 100}, ship_model, "Player Ship");
-      give_gun(player_ship, 1000, 0.2, ship_model);
-      PLAYER_CONTROLLED_ENTITY = player_ship;
-    }
+      glm_mat4_identity(spawn_location);
+      glm_translate(spawn_location, (vec3){0, 100, 100});
 
-    time_since_last_spawn += delta_t_f32;
-    if (time_since_last_spawn > 2) {
-      /*
-            uint32_t owning_faction = (rand() % 2) + 1;
-            uint32_t station        = station_a;
-            if (owning_faction == 2) {
-              station = station_b;
-            }
-            printf("Spawning ship\n");
-            mat4 rotation;
-            glm_mat4_copy(ENTITY_TRANSFORM[station_a], rotation);
-            glm_vec4_zero(rotation[3]);
-            vec3 offset = {100., 0., 0.};
-            glm_mat4_mulv3(rotation, offset, 1, offset);
-            glm_vec3_add(offset, ENTITY_TRANSFORM[station_a][3], offset);
-            mat4 spawn_location;
-            glm_mat4_copy(ENTITY_TRANSFORM[station], spawn_location);
-            glm_translate(spawn_location, offset);
-            uint32_t new_ship =
-                make_entity(spawn_location, ENTITY_FACTION[station],
-                            ENTITY_COLORS[station], 1, 100, ship_model, "AI
-         Ship"); give_gun(new_ship, 1000, 0.2, ship_model);
-            time_since_last_spawn = 0;
-            */
+      PLAYER_CONTROLLED_ENTITY =
+          make_entity(spawn_location, player_faction, (vec3){0., 1., 0.}, 1,
+                      (vec3){20, 20, 100}, ship_model, "Player Ship");
+      give_gun(PLAYER_CONTROLLED_ENTITY, 1000, 0.2, ship_model);
+      entity_set_ondeath(PLAYER_CONTROLLED_ENTITY, ONDEATH_EXPLODE);
+      entity_set_health(PLAYER_CONTROLLED_ENTITY, 5);
     }
 
     sim_loop(delta_t_f32);

@@ -1,7 +1,7 @@
 #ifndef VLK_HEADER
 #define VLK_HEADER
+#include "./map_loader.h"
 #include "./vendor/cglm/cglm.h"
-#include "./vendor/fast_obj.h"
 #include "engine.h"
 #include "vendor/cglm/mat4.h"
 #include <SDL3/SDL.h>
@@ -200,6 +200,22 @@ typedef struct Vertex {
   vec3 col;
 } Vertex;
 
+map_vertex_layout LAYOUT = {
+    .stride = sizeof(Vertex),
+    .pos =
+        {
+            offsetof(Vertex, pos) + sizeof(float) * 0,
+            offsetof(Vertex, pos) + sizeof(float) * 1,
+            offsetof(Vertex, pos) + sizeof(float) * 2,
+        },
+    .norm =
+        {
+            offsetof(Vertex, norm) + sizeof(float) * 0,
+            offsetof(Vertex, norm) + sizeof(float) * 1,
+            offsetof(Vertex, norm) + sizeof(float) * 2,
+        },
+};
+
 vec3 debug_cols[4] = {
     {1., 0., 0.},
     {0., 1., 0.},
@@ -207,88 +223,45 @@ vec3 debug_cols[4] = {
     {0., 1., 1.},
 };
 
-unsigned int obj_to_indexbuffer(fastObjMesh *brush,
-                                SomeShitAllocated *vertex_buffer) {
+unsigned int map_to_vertbuffer(map_t *m, SomeShitAllocated *vertex_buffer) {
 
-  // First calculate the number of vertices
-  unsigned int out_index_count = 0;
-
-  // For each group in the obj
-  for (int group_n = 0; group_n < brush->group_count; group_n++) {
-    fastObjGroup grp = brush->groups[group_n];
-
-    // For each face in the group
-    for (int face_n = 0; face_n < grp.face_count; face_n++) {
-
-      // Fan out; triangle = one tri (3 = 3), quad = two tries (6 = 4), 5-gon =
-      // three tris (9 = 5) So Face tri's index count = (face n-gon's index
-      // count - 2) * 3
-      out_index_count +=
-          (brush->face_vertices[grp.face_offset + face_n] - 2) * 3;
+  // Calculate # of vertices
+  uint32_t vertcount = 0;
+  for (uint32_t t = 0; t < m->entity_count; t++) {
+    for (uint32_t i = 0; i < m->entities[t].brush_count; i++) {
+      uint32_t tri_count;
+      map_brush_triangulate(&m->entities[t].brushes[i], 0, 0, &tri_count);
+      vertcount += tri_count * 3;
     }
   }
 
   // Position and normal
-  vlk_allocateSomeShit(out_index_count * sizeof(Vertex), vertex_buffer);
+  vlk_allocateSomeShit(vertcount * sizeof(Vertex), vertex_buffer);
   Vertex *vertex_buffer_write = (Vertex *)(vertex_buffer->the_shit_on_host);
 
-  // Now populate the verts
-  uint32_t out_idx = 0;
-
-  // For each group in the obj
-  for (int group_n = 0; group_n < brush->group_count; group_n++) {
-    fastObjGroup grp = brush->groups[group_n];
-
-    unsigned int idx = grp.index_offset;
-
-    // For each face in the group
-    for (int face_n = 0; face_n < grp.face_count; face_n++) {
-      // Get the count of vertices in the face
-      unsigned int vert_count = brush->face_vertices[grp.face_offset + face_n];
-
-      // Note down the start of the face in the obj's index array. We'll need it
-      // below to fan out the face for triangulation.
-      unsigned int face_start = idx;
-      // If face is a tri, iterate once. If face is a quad, iterate twice, etc.
-      for (int tri_n = 0; tri_n <= vert_count - 3; tri_n++) {
-
-        // First index (of the tri) is always the first index of the face
-        float *pos  = &brush->positions[brush->indices[face_start].p * 3];
-        float *norm = &brush->normals[brush->indices[face_start].n * 3];
-        // float *col  = debug_cols[face_n & 0b11];
-        float *col = (vec3){1., 1., 1.};
-        vertex_buffer_write[out_idx++] =
-            (Vertex){.pos = V3(pos), .norm = V3(norm), .col = V3(col)};
-
-        // Other two points, step through
-        pos  = &brush->positions[brush->indices[idx + 1].p * 3];
-        norm = &brush->normals[brush->indices[idx + 1].n * 3];
-        vertex_buffer_write[out_idx++] =
-            (Vertex){.pos = V3(pos), .norm = V3(norm), .col = V3(col)};
-        pos  = &brush->positions[brush->indices[idx + 2].p * 3];
-        norm = &brush->normals[brush->indices[idx + 2].n * 3];
-        vertex_buffer_write[out_idx++] =
-            (Vertex){.pos = V3(pos), .norm = V3(norm), .col = V3(col)};
-        // Index (0,1,2),(0,2,3), (0,3,4) for a 5-gon
-
-        // The index array stores faces contiguously, we are *actually*
-        // looping the entire index array a single time after we loop over
-        // each face.
-        idx++;
+  vertcount = 0;
+  for (uint32_t t = 0; t < m->entity_count; t++) {
+    for (uint32_t t = 0; t < m->entity_count; t++) {
+      for (uint32_t i = 0; i < m->entities[t].brush_count; i++) {
+        uint32_t tri_count;
+        map_brush_triangulate(&m->entities[t].brushes[i],
+                              &vertex_buffer_write[vertcount], &LAYOUT,
+                              &tri_count);
+        vertcount += tri_count * 3;
       }
-      // Because we loop as many times as we have vertices on the face - 2; we
-      // skip two ahead.
-      idx += 2;
     }
   }
-
-  return out_index_count;
+  for (uint32_t i = 0; i < vertcount; i++) {
+    vertex_buffer_write[i].col[0] = 1.;
+    vertex_buffer_write[i].col[1] = 1.;
+    vertex_buffer_write[i].col[2] = 1.;
+  }
+  return vertcount;
 }
 
-unsigned int load_model(fastObjMesh *brush) {
-  assert(brush != 0);
+unsigned int load_model(map_t *m) {
   SomeShitAllocated vertex_buffer;
-  unsigned int vertex_count = obj_to_indexbuffer(brush, &vertex_buffer);
+  unsigned int vertex_count = map_to_vertbuffer(m, &vertex_buffer);
 
   GAME_MODELS[GAME_MODEL_COUNT] =
       (Model){.vert_count  = vertex_count,

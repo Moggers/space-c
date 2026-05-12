@@ -69,11 +69,18 @@ void ai_accept_contracts() {
 
 int target_asteroid_cb(uint32_t prim_index, bvh_closest *closest, void *user) {
   uint32_t shipId = *(uint32_t *)user;
-  printf("Found target %s\n", ENTITY_NAME[AABB_IDS[prim_index]]);
-  if (ENTITY_IS_ASTEROID[AABB_IDS[prim_index]]) {
+  uint32_t targId = AABB_IDS[prim_index];
+  if (ENTITY_IS_ASTEROID[targId]) {
     printf("Found asteroid\n");
-    AI_TARGETS[shipId] = AABB_IDS[prim_index];
-    return 1;
+    if (ENTITY_SCALE[targId][0] <= ENTITY_SCALE[shipId][0]) {
+      AI_TARGETS[shipId] = targId;
+      return 1;
+    }
+    if (AI_TARGETS[shipId] == -1 ||
+        ENTITY_SCALE[targId][0] < ENTITY_SCALE[AI_TARGETS[shipId]][0]) {
+      AI_TARGETS[shipId] = targId;
+      return 0;
+    }
   }
   return 0;
 }
@@ -87,15 +94,13 @@ void ai_ship_select_tasks() {
       uint32_t contract = ENTITY_ACCEPTED_CONTRACT[ship];
       switch (CONTRACT_TYPE[contract]) {
       case CONTRACT_ORE: {
-        if (AI_TARGETS[ship] == -1) {
-          bvh_closest_query(
-              &ENTITY_BVH,
-              &(bvh_closest){.point       = {ENTITY_TRANSFORM[ship][3][0],
-                                             ENTITY_TRANSFORM[ship][3][1],
-                                             ENTITY_TRANSFORM[ship][3][2]},
-                             .max_dist_sq = 9999999},
-              target_asteroid_cb, &ship);
-        }
+        bvh_closest_query(
+            &ENTITY_BVH,
+            &(bvh_closest){.point       = {ENTITY_TRANSFORM[ship][3][0],
+                                           ENTITY_TRANSFORM[ship][3][1],
+                                           ENTITY_TRANSFORM[ship][3][2]},
+                           .max_dist_sq = 9999999},
+            target_asteroid_cb, &ship);
         if (AI_TARGETS[ship] != -1) {
           if (ENTITY_SCALE[ship][0] >= ENTITY_SCALE[AI_TARGETS[ship]][0]) {
             AI_MODE[ship]          = AIM_COLLECT;
@@ -103,9 +108,11 @@ void ai_ship_select_tasks() {
           } else {
             AI_MODE[ship]    = AIM_KILL;
             float *targscale = ENTITY_SCALE[AI_TARGETS[ship]];
+            float *shipscale = ENTITY_SCALE[ship];
             float maxsize =
-                fmax(targscale[0], fmax(targscale[1], targscale[2]));
-            AI_MAINTAIN_DIST[ship] = maxsize * 2;
+                fmax(targscale[0], fmax(targscale[1], targscale[2])) * 2 +
+                fmax(shipscale[0], fmax(shipscale[1], shipscale[2])) * 4;
+            AI_MAINTAIN_DIST[ship] = maxsize;
           }
         }
         break;
@@ -152,6 +159,9 @@ int ai_ship_ray_shoot_cb(uint32_t primid, bvh_ray *r, void *userdata) {
 
 void ai_ship_shoot() {
   for (uint32_t ship = 0; ship < ENTITY_COUNT; ship++) {
+    if (ship == PLAYER_CONTROLLED_ENTITY) {
+      continue;
+    }
     if (ENTITY_DEAD[ship]) {
       GUN_ACTIVE[ship] = false;
       continue;
@@ -160,8 +170,7 @@ void ai_ship_shoot() {
       GUN_ACTIVE[ship] = false;
       continue;
     }
-    if ((GUN_RELOAD_TIME[ship] != 0) & (ship != PLAYER_CONTROLLED_ENTITY) &
-        (AI_TARGETS[ship] != -1)) {
+    if ((GUN_RELOAD_TIME[ship] != 0) & (AI_TARGETS[ship] != -1)) {
 
       bvh_ray r;
       vec3 targloc;
@@ -188,47 +197,60 @@ void ai_ship_thrusters() {
       continue;
     }
     uint32_t target = AI_TARGETS[ship];
-    // Turning towards target
-    vec3 targ_loc_transformed;
     mat4 inv;
     glm_mat4_inv(ENTITY_TRANSFORM[ship], inv);
-    glm_mat4_mulv3(inv, ENTITY_TRANSFORM[target][3], 1, targ_loc_transformed);
-    // Pitch = Y/Z (add a bit of Z to avoid divide by 0)
+
+    // Get raw target location relative to ship coordinates normalized
+    vec3 target_heading;
+    glm_mat4_mulv3(inv, ENTITY_TRANSFORM[target][3], 1, target_heading);
+    glm_vec3_normalize(target_heading);
     ENTITY_CURRENT_VEC_THRUST[ship][0] =
-        -targ_loc_transformed[1] * (fabs(targ_loc_transformed[2]) + 1);
-    // Yaw = 0
-    ENTITY_CURRENT_VEC_THRUST[ship][1] = 0.;
-    // Roll = X/Y
+        glm_clamp(-target_heading[1] * 5, -ENTITY_VEC_THRUST[ship],
+                  ENTITY_VEC_THRUST[ship]);
+    ENTITY_CURRENT_VEC_THRUST[ship][1] =
+        glm_clamp(target_heading[0] * 5, -ENTITY_VEC_THRUST[ship],
+                  ENTITY_VEC_THRUST[ship]);
     ENTITY_CURRENT_VEC_THRUST[ship][2] =
-        targ_loc_transformed[0] / -targ_loc_transformed[1];
+        glm_clamp(target_heading[0] * 5, -ENTITY_VEC_THRUST[ship],
+                  ENTITY_VEC_THRUST[ship]);
 
-    // Main thruster
-    vec3 modifedloc;
-    glm_vec3_copy(ENTITY_TRANSFORM[ship][3], modifedloc);
-    vec3 inmod;
-    glm_vec3_copy(ENTITY_INERTIA[ship], inmod);
-    glm_vec3_scale(inmod, 5, inmod);
-    glm_vec3_sub(modifedloc, ENTITY_INERTIA[ship], modifedloc);
-    float cdist = glm_vec3_distance(modifedloc, ENTITY_TRANSFORM[target][3]);
+    // Get target location
+    vec3 rel_target_location;
+    glm_vec3_copy(ENTITY_TRANSFORM[target][3], rel_target_location);
+    // Add the maintained distance
+    vec3 backheading;
+    glm_vec3_sub(ENTITY_TRANSFORM[ship][3], ENTITY_TRANSFORM[target][3],
+                 backheading);
+    glm_vec3_normalize(backheading);
+    glm_vec3_scale(backheading, AI_MAINTAIN_DIST[ship], backheading);
+    // Add the offset to t e target location
+    glm_vec3_add(backheading, rel_target_location, rel_target_location);
 
-    vec3 relpos;
-    glm_vec3_sub(ENTITY_TRANSFORM[AI_TARGETS[ship]][3],
-                 ENTITY_TRANSFORM[ship][3], relpos);
-    glm_vec3_sub(relpos, ENTITY_INERTIA[ship], relpos);
-    glm_vec3_normalize(relpos);
+    // Add inverse of velocity (dampening)
+    vec3 delta_v;
+    glm_vec3_sub((vec3){0., 0., 0.}, ENTITY_INERTIA[ship], delta_v);
+    glm_vec3_scale(delta_v, 1, delta_v);
+    glm_vec3_add(rel_target_location, delta_v, rel_target_location);
+    // Transform target location into local coordinates
+    glm_mat4_mulv3(inv, rel_target_location, 1, rel_target_location);
 
-    // Above zero if too far, below zero if too close
-    float degree = cdist - AI_MAINTAIN_DIST[ship];
-    float thrustx = fmax(fmin(degree, fabs(ENTITY_THRUST_POWER[ship][0])),
-                        -fabs(ENTITY_THRUST_POWER[ship][0])) *glm_vec3_dot(relpos, ENTITY_TRANSFORM[ship][0]);
-    float thrusty = fmax(fmin(degree, fabs(ENTITY_THRUST_POWER[ship][1])),
-                        -fabs(ENTITY_THRUST_POWER[ship][1])) *glm_vec3_dot(relpos, ENTITY_TRANSFORM[ship][1]);
-    float thrustz = fmax(fmin(degree, fabs(ENTITY_THRUST_POWER[ship][2])),
-                        -fabs(ENTITY_THRUST_POWER[ship][2])) *glm_vec3_dot(relpos, ENTITY_TRANSFORM[ship][2]);
-
-    ENTITY_CURRENT_THRUST[ship][0] = thrustx;
-    ENTITY_CURRENT_THRUST[ship][1] = thrusty;
-    ENTITY_CURRENT_THRUST[ship][2] = thrustz;
+#define BREAKING_DISTANCE 50
+    // Power corresponds to more than BREAKING_DISTANCE units along the thrust
+    // axis. Get the throttle position on each axis
+    float rpwr =
+        glm_clamp(glm_vec3_dot((vec3){1., 0., .0}, rel_target_location) /
+                      BREAKING_DISTANCE,
+                  -1, 1);
+    float upwr = glm_clamp(glm_vec3_dot((vec3){0, 1, 0}, rel_target_location) /
+                               BREAKING_DISTANCE,
+                           -1, 1);
+    float fpwr =
+        glm_clamp(glm_vec3_dot((vec3){0., 0., 1}, rel_target_location) /
+                      BREAKING_DISTANCE,
+                  -1, 1.);
+    // Apply throttle, multiplied by actual engine power along all three axes
+    glm_vec3_mul((vec3){rpwr, upwr, fpwr}, ENTITY_THRUST_POWER[ship],
+                 ENTITY_CURRENT_THRUST[ship]);
   }
 }
 

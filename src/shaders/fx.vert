@@ -19,9 +19,9 @@ layout(push_constant) uniform Push {
 } pc;
 
 vec3 verts[6] = vec3[6](
-    vec3(1, -1, 0),
     vec3(-1, -1, 0),
     vec3(1, 1, 0),
+    vec3(1, -1, 0),
     vec3(-1, 1, 0),
     vec3(1, 1, 0),
     vec3(-1, -1, 0)
@@ -35,7 +35,7 @@ void main() {
   gl_Position = (
     (pc.proj
       * ((pc.view * vec4(instance.pos, 1))
-      + vec4(verts[gl_VertexIndex] * vec3(5, 5, 5), 1))))
+      + vec4(verts[gl_VertexIndex] * vec3(5, 5, 5), 0))))
       * vec4(1., -1., 1., 1.);
   fragColor = vec3(1., 1., 1);
   t = 1. - (instance.t / instance.max_t);
