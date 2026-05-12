@@ -14,12 +14,14 @@
 
 #define AIM_KILL 1
 #define AIM_COLLECT 2
-#define AIM_DELIVER 3
+#define AIM_DOCKING 3
+#define AIM_LANDING 3
 
 float AI_MAINTAIN_DIST[MAX_ENTITIES];
 uint32_t AI_TARGETS[MAX_ENTITIES];
 uint32_t AI_MODE[MAX_ENTITIES];
 vec3 AI_NAVIGATE_TO[MAX_ENTITIES];
+uint32_t AI_ALIGN_TO[MAX_ENTITIES];
 
 int ai_contract_suitable(uint32_t entity, uint32_t contract) {
 
@@ -103,7 +105,7 @@ void ai_ship_select_tasks() {
           if (ENTITY_INVENTORY_COUNT[ship][k] <= CONTRACT_AMOUNT[contract] &&
               ENTITY_INVENTORY_ITEMS[ship][k] == ItemOre) {
             AI_TARGETS[ship] = CONTRACT_ISSUING_ENTITY[contract];
-            AI_MODE[ship]    = AIM_DELIVER;
+            AI_MODE[ship]    = AIM_DOCKING;
             uint32_t model   = ENTITY_MODEL[AI_TARGETS[ship]];
             map_t *map       = MODEL_MAP[model];
             map_entity *entity;
@@ -111,7 +113,6 @@ void ai_ship_select_tasks() {
               entity                = &map->entities[enti];
               const char *classname = map_entity_get(entity, "classname");
               if (strcmp(classname, "info_landingpad") == 0) {
-                printf("Found a landingpad!\n");
                 vec3 landingpadloc, landingpadnorm;
                 map_entity_get_vec3(entity, "origin", landingpadloc);
                 map_entity_get_vec3(entity, "normal", landingpadnorm);
@@ -124,11 +125,22 @@ void ai_ship_select_tasks() {
                 glm_vec3_copy(landingpadloc, AI_NAVIGATE_TO[ship]);
               }
             }
+            float dist = glm_vec3_distance(ENTITY_TRANSFORM[ship][3],
+                                           AI_NAVIGATE_TO[ship]);
+            if (dist < 5) {
+              AI_ALIGN_TO[ship] = AI_TARGETS[ship];
+            }
+            if (dist < 3 &&
+                glm_vec3_dot(ENTITY_TRANSFORM[ship][2],
+                             ENTITY_TRANSFORM[AI_TARGETS[ship]][2]) > 0.8) {
+              printf("LANDING!!\n");
+              ENTITY_DOCKING[ship] = AI_TARGETS[ship];
+            }
             break;
           }
         }
 
-        if (AI_MODE[ship] == AIM_DELIVER) {
+        if ((AI_MODE[ship] == AIM_DOCKING) | (AI_MODE[ship] == AIM_LANDING)) {
           continue;
         }
         // Go find it
@@ -253,8 +265,15 @@ void ai_ship_thrusters() {
 
     // Get raw target location relative to ship coordinates normalized
     vec3 target_heading;
-    glm_mat4_mulv3(inv, rel_target_location, 1, target_heading);
-    glm_vec3_normalize(target_heading);
+    if (AI_ALIGN_TO[ship]) {
+      // Fixing aligngment
+      glm_vec3_copy(ENTITY_TRANSFORM[AI_TARGETS[ship]][2], target_heading);
+      glm_vec3_rotate_m4(inv, target_heading, target_heading);
+    } else {
+      // Aim at target
+      glm_mat4_mulv3(inv, rel_target_location, 1, target_heading);
+      glm_vec3_normalize(target_heading);
+    }
     ENTITY_CURRENT_VEC_THRUST[ship][0] =
         glm_clamp(-target_heading[1] * 5, -ENTITY_VEC_THRUST[ship],
                   ENTITY_VEC_THRUST[ship]);
@@ -267,8 +286,7 @@ void ai_ship_thrusters() {
 
     // Add the maintained distance
     vec3 backheading;
-    glm_vec3_sub(ENTITY_TRANSFORM[ship][3], rel_target_location,
-                 backheading);
+    glm_vec3_sub(ENTITY_TRANSFORM[ship][3], rel_target_location, backheading);
     glm_vec3_normalize(backheading);
     glm_vec3_scale(backheading, AI_MAINTAIN_DIST[ship], backheading);
     // Add the offset to t e target location

@@ -177,7 +177,7 @@ int handle_subcollision(uint32_t prim_index, void *user) {
   mat4 inv;
   glm_mat4_inv(ENTITY_TRANSFORM[subcol->b_entityid], inv);
   int32_t closest_face = -1;
-  float largest_dot   = 99999;
+  float largest_dot    = 99999;
   vec3 relvert_closest_face;
   for (uint32_t t = 0; t < map_a->entity_count; t++) {
     for (uint32_t i = 0; i < map_a->entities[t].brush_count; i++) {
@@ -194,7 +194,7 @@ int handle_subcollision(uint32_t prim_index, void *user) {
         // Check each face of brush B
         uint32_t missed_something  = 0;
         int32_t inner_closest_face = -1;
-        float inner_least_mag_dot   = -99999;
+        float inner_least_mag_dot  = -99999;
         vec3 inner_relvert_closest_face;
         for (uint32_t j = 0; j < brush->face_count; j++) {
           map_face *face = &brush->faces[j];
@@ -210,7 +210,7 @@ int handle_subcollision(uint32_t prim_index, void *user) {
           // the brush B
           float dot = glm_vec3_dot(face->normal, relvert);
           if (dot < 0 && dot > inner_least_mag_dot) {
-            inner_closest_face = j;
+            inner_closest_face  = j;
             inner_least_mag_dot = dot;
             glm_vec3_copy(relvert, inner_relvert_closest_face);
           }
@@ -222,10 +222,11 @@ int handle_subcollision(uint32_t prim_index, void *user) {
         // If we were behind all the planes, we are inside the brush.
         if (!missed_something) {
 
-          // Identify if this is the deepest vertex so far, if it is, note down said dot and norm so we can shunt out later
+          // Identify if this is the deepest vertex so far, if it is, note down
+          // said dot and norm so we can shunt out later
           if (inner_least_mag_dot < largest_dot) {
             closest_face = inner_closest_face;
-            largest_dot = inner_least_mag_dot;
+            largest_dot  = inner_least_mag_dot;
             glm_vec3_copy(inner_relvert_closest_face, relvert_closest_face);
           }
         }
@@ -241,7 +242,8 @@ int handle_subcollision(uint32_t prim_index, void *user) {
     }
     damage_entity(entity_b, entity_a);
     damage_entity(entity_a, entity_b);
-    // Push out based on the dot and norm of the deepest vert and the face that vert was closest to
+    // Push out based on the dot and norm of the deepest vert and the face that
+    // vert was closest to
     vec3 shuntnorm;
     // Get the normal of the face we were closest to the front of
     glm_vec3_copy(brush->faces[closest_face].normal, shuntnorm);
@@ -410,6 +412,41 @@ void collect_items() {
   }
 }
 
+void dock_ships(float delta_time) {
+  for (uint32_t ship = 0; ship < ENTITY_COUNT; ship++) {
+    if (ENTITY_DOCKING[ship]) {
+      uint32_t dockingAt = ENTITY_DOCKING[ship];
+      map_t *model       = MODEL_MAP[ENTITY_MODEL[dockingAt]];
+      for (uint32_t k = 0; k < model->entity_count; k++) {
+        map_entity *ent       = &model->entities[k];
+        const char *classname = map_entity_get(ent, "classname");
+        if (strcmp(classname, "info_landingpad") == 0) {
+          vec3 landingspot;
+          vec3 landingnorm;
+          map_entity_get_vec3(ent, "origin", landingspot);
+          map_entity_get_vec3(ent, "normal", landingnorm);
+          glm_vec3_scale(landingnorm, 2, landingnorm);
+          glm_vec3_add(landingspot, landingnorm, landingspot);
+          glm_mat4_mulv3(ENTITY_TRANSFORM[dockingAt], landingspot, 1,
+                         landingspot);
+          glm_vec3_sub(ENTITY_TRANSFORM[ship][3], landingspot, landingspot);
+          float dist = glm_vec3_distance(landingspot, (vec3){0, 0, 0});
+          //TODO: WHY NOT DOCKED!!!
+          if (dist < 1) {
+            ENTITY_DOCKED[ship] = dockingAt;
+            printf("Docked!\n");
+            continue;
+          }
+          glm_vec3_scale(landingspot, delta_time * 5, landingspot);
+          glm_vec3_clamp(landingspot, -delta_time, delta_time);
+          glm_vec3_sub(ENTITY_TRANSFORM[ship][3], landingspot,
+                       ENTITY_TRANSFORM[ship][3]);
+        }
+      }
+    }
+  }
+}
+
 void sim_loop(float delta_time) {
 
   // Faction routines
@@ -432,6 +469,7 @@ void sim_loop(float delta_time) {
   collect_items();
   fire_guns(delta_time);
   death_animations(delta_time);
+  dock_ships(delta_time);
 
   // FX
   play_fx(delta_time);

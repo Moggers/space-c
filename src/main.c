@@ -90,7 +90,7 @@ int main(int argc, char *argv[]) {
   glm_mat4_identity(spawn_location);
   glm_translate(spawn_location, (vec3){0, 0, 0});
   uint32_t station_a =
-      make_entity(spawn_location, mining_faction, (vec3){0., 1., 0.}, -1,
+      make_entity(spawn_location, mining_faction, (vec3){0.7, 0.7, 0.7}, -1,
                   (vec3){-1, -1, -1}, station_model, "Statio A");
   entity_set_health(station_a, 10000);
   entity_set_ondeath(station_a, ONDEATH_EXPLODE);
@@ -101,7 +101,7 @@ int main(int argc, char *argv[]) {
   glm_mat4_identity(spawn_location);
   glm_translate(spawn_location, (vec3){500, 200, -200});
   uint32_t new_ship =
-      make_entity(spawn_location, mining_faction, ENTITY_COLORS[station_a], 1,
+      make_entity(spawn_location, mining_faction, (vec3){0.3, 0.3, 0.4}, 1,
                   (vec3){20, 20, 100}, ship_model, "AI Ship");
   give_gun(new_ship, 1000, 0.2, ship_model, 1);
   entity_set_ondeath(new_ship, ONDEATH_EXPLODE);

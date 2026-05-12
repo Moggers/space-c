@@ -102,7 +102,7 @@ void apply_vec_thrusters(float delta_time) {
 
 void apply_thrusters(float delta_time) {
   for (uint32_t ship = 0; ship < ENTITY_COUNT; ship++) {
-    if ((ENTITY_DEAD[ship] > 0) | (ENTITY_THRUST_POWER[ship][0] == -1)) {
+    if ((ENTITY_DEAD[ship] > 0) | (ENTITY_THRUST_POWER[ship][0] == -1) | (ENTITY_DOCKING[ship])) {
       continue;
     }
 
@@ -139,6 +139,9 @@ void apply_thrusters(float delta_time) {
 
 void apply_movement(float delta_time) {
   for (uint32_t ship = 0; ship < ENTITY_COUNT; ship++) {
+    if (ENTITY_DOCKING[ship]) {
+      continue;
+    }
     ENTITY_TRANSFORM[ship][3][0] += ENTITY_INERTIA[ship][0] * delta_time;
     ENTITY_TRANSFORM[ship][3][1] += ENTITY_INERTIA[ship][1] * delta_time;
     ENTITY_TRANSFORM[ship][3][2] += ENTITY_INERTIA[ship][2] * delta_time;
