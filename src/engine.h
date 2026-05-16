@@ -7,6 +7,7 @@
 #include "map_loader.h"
 #include "vendor/cglm/mat4.h"
 #include "vendor/cglm/vec3.h"
+#include <float.h>
 #include <math.h>
 #include <stdlib.h>
 
@@ -89,7 +90,6 @@ void ondeath_delete(uint32_t entityId) {
 
 void ondeath_split(uint32_t entityId, uint32_t splitter) {
   uint32_t damage = ENTITY_MAXHEALTH[splitter];
-  double randdir  = rand() * 10;
   if (ENTITY_MAXHEALTH[entityId] == 1) {
     ondeath_delete(entityId);
     return;
@@ -334,14 +334,6 @@ int ray_cb(uint32_t prim_index, bvh_ray *ray, void *user) {
   return ++LAST_RAY_COUNT < 32;
 }
 
-void check_intersection(vec3 start, vec3 dir) {
-
-  bvh_ray ray;
-  bvh_ray_init(&ray, start, dir, 0, 100000);
-  LAST_RAY_COUNT = 0;
-  bvh_ray_query_tight(&ENTITY_BVH, &ray, &ray_cb, 0);
-}
-
 void do_collisions() { bvh_self_overlap(&ENTITY_BVH, handle_collision, 0); }
 
 void fire_guns(float delta_time) {
@@ -380,8 +372,8 @@ void collect_items() {
       for (inventory_slot = 0; inventory_slot < INVENTORY_SLOTS;
            inventory_slot++) {
         if (ENTITY_INVENTORY_COUNT[ship][inventory_slot] == 0 ||
-            ENTITY_INVENTORY_ITEMS[ship][inventory_slot] == ItemOre &&
-                ENTITY_IS_ASTEROID[ecollecting]) {
+            (ENTITY_INVENTORY_ITEMS[ship][inventory_slot] == ItemOre &&
+             ENTITY_IS_ASTEROID[ecollecting])) {
           break;
         }
       }
@@ -414,37 +406,151 @@ void collect_items() {
 
 void dock_ships(float delta_time) {
   for (uint32_t ship = 0; ship < ENTITY_COUNT; ship++) {
-    if (ENTITY_DOCKING[ship]) {
-      uint32_t dockingAt = ENTITY_DOCKING[ship];
+    if (ENTITY_DOCKING[ship][0]) {
+      uint32_t dockingAt = ENTITY_DOCKING[ship][0];
+      uint32_t dockPoint = ENTITY_DOCKING[ship][1];
       map_t *model       = MODEL_MAP[ENTITY_MODEL[dockingAt]];
-      for (uint32_t k = 0; k < model->entity_count; k++) {
-        map_entity *ent       = &model->entities[k];
-        const char *classname = map_entity_get(ent, "classname");
-        if (strcmp(classname, "info_landingpad") == 0) {
-          vec3 landingspot;
-          vec3 landingnorm;
-          map_entity_get_vec3(ent, "origin", landingspot);
-          map_entity_get_vec3(ent, "normal", landingnorm);
-          glm_vec3_scale(landingnorm, 2, landingnorm);
-          glm_vec3_add(landingspot, landingnorm, landingspot);
-          glm_mat4_mulv3(ENTITY_TRANSFORM[dockingAt], landingspot, 1,
-                         landingspot);
-          glm_vec3_sub(ENTITY_TRANSFORM[ship][3], landingspot, landingspot);
-          float dist = glm_vec3_distance(landingspot, (vec3){0, 0, 0});
-          //TODO: WHY NOT DOCKED!!!
-          if (dist < 1) {
-            ENTITY_DOCKED[ship] = dockingAt;
-            printf("Docked!\n");
-            continue;
-          }
-          glm_vec3_scale(landingspot, delta_time * 5, landingspot);
-          glm_vec3_clamp(landingspot, -delta_time, delta_time);
-          glm_vec3_sub(ENTITY_TRANSFORM[ship][3], landingspot,
-                       ENTITY_TRANSFORM[ship][3]);
-        }
+      map_entity *ent    = &model->entities[dockPoint];
+      vec3 landingspot;
+      vec3 landingnorm;
+      map_entity_get_vec3(ent, "origin", landingspot);
+      map_entity_get_vec3(ent, "normal", landingnorm);
+      glm_vec3_scale(landingnorm, 2, landingnorm);
+      glm_vec3_add(landingspot, landingnorm, landingspot);
+      glm_mat4_mulv3(ENTITY_TRANSFORM[dockingAt], landingspot, 1, landingspot);
+      glm_vec3_sub(ENTITY_TRANSFORM[ship][3], landingspot, landingspot);
+      float dist = glm_vec3_distance(landingspot, (vec3){0, 0, 0});
+      // TODO: WHY NOT DOCKED!!!
+      if (dist < 1) {
+        ENTITY_DOCKED[ship] = dockingAt;
+        continue;
       }
+      glm_vec3_scale(landingspot, delta_time * 5, landingspot);
+      glm_vec3_clamp(landingspot, -delta_time, delta_time);
+      glm_vec3_sub(ENTITY_TRANSFORM[ship][3], landingspot,
+                   ENTITY_TRANSFORM[ship][3]);
     }
   }
+}
+
+typedef struct ri_userdata {
+  vec3 incidence;
+  map_face *incident_face;
+  float best_t;
+  uint32_t best_entity;
+} ri_userdata;
+typedef struct risu_userdata {
+  map_t *map;
+  ri_userdata *out;
+  uint32_t entity;
+} risu_userdata;
+int ray_intersection_subcb(uint32_t prim, bvh_ray *r, void *userdata) {
+  risu_userdata *risu = (risu_userdata *)userdata;
+  map_brush b         = risu->map->entities[0].brushes[prim];
+
+  for (uint32_t i = 0; i < b.face_count; i++) {
+    map_face *f = &b.faces[i];
+    float *vert = b.vertices[b.indices[b.faces[i].first_index]];
+
+    vec3 relvert;
+    glm_vec3_sub(vert, r->origin, relvert);
+
+    float dot1 = glm_vec3_dot(relvert, f->normal);
+    float dot2 = glm_vec3_dot(f->normal, r->dir);
+
+    // Either backface or more-or-less perpendicular with plane
+    if (dot2 > -0.001) {
+      continue;
+    }
+    float t = dot1 / dot2;
+
+    // The incidence is behind us.
+    if (t < 0) {
+      continue;
+    }
+
+    vec3 offset;
+    glm_vec3_scale(r->dir, t, offset);
+    vec3 incidence;
+    glm_vec3_add(r->origin, offset, incidence);
+
+    // Check if within bounds of polygon
+    uint32_t missed = 0;
+    // For each vertex
+    for (uint32_t k = 0; k < f->index_count; k++) {
+      vec3 relvertthing, outward, relinc;
+      // Get the heading from vertex to incidence
+      glm_vec3_sub(incidence, b.vertices[b.indices[f->first_index + k]],
+                   relinc);
+      // Get the heading from the vertex to the next vetex (the line we want the
+      // cross product of)
+      glm_vec3_sub(
+          b.vertices[b.indices[f->first_index + ((k + 1) % f->index_count)]],
+          b.vertices[b.indices[f->first_index + k]], relvertthing);
+      // Get the cross product between line dir and normal to find normal facing
+      // out of the polygon
+      glm_vec3_cross(relvertthing, f->normal, outward);
+
+      // If the dot product between incidence relative to the vertex and the
+      // direction out from the line the vertex starts is above 0 then we are
+      // outside the polygon
+      if (glm_vec3_dot(outward, relinc) > 0) {
+        missed = 1;
+      }
+    }
+    if (missed == 1) {
+      continue;
+    }
+
+    // Is this the first intersection or closer than any found so far
+    if (t < risu->out->best_t) {
+      risu->out->best_t        = t;
+      risu->out->incident_face = f;
+      risu->out->best_entity   = risu->entity;
+      glm_vec3_copy(incidence, risu->out->incidence);
+    }
+  }
+  return 0;
+}
+int ray_intersection_cb(uint32_t prim, bvh_ray *r, void *userdata) {
+  uint32_t striking = AABB_IDS[prim];
+  bvh_ray ray;
+  mat4 inv;
+  glm_mat4_inv(ENTITY_TRANSFORM[striking], inv);
+  vec3 no, nd;
+  glm_mat4_mulv3(inv, r->origin, 1, no);
+  glm_vec3_div(no, ENTITY_SCALE[striking], no);
+  glm_vec3_rotate_m4(inv, r->dir, nd);
+  bvh_ray_init(&ray, no, nd, 0, 1000);
+  risu_userdata risu = {
+      .map    = MODEL_MAP[ENTITY_MODEL[striking]],
+      .entity = striking,
+      .out    = userdata,
+  };
+  bvh_ray_query_tight(&MODEL_HULLS[ENTITY_MODEL[striking]], &ray,
+                      ray_intersection_subcb, &risu);
+  return 0;
+}
+
+ri_userdata ray_intersection(vec3 origin, vec3 dir) {
+  bvh_ray ray;
+  bvh_ray_init(&ray, origin, dir, 0, 10000);
+  ri_userdata out = {.best_t = FLT_MAX};
+  bvh_ray_query_tight(&ENTITY_BVH, &ray, ray_intersection_cb, &out);
+  if (out.best_t != FLT_MAX) {
+    glm_vec3_mulv(ENTITY_SCALE[out.best_entity], out.incidence, out.incidence);
+    glm_mat4_mulv3(ENTITY_TRANSFORM[out.best_entity], out.incidence, 1,
+                   out.incidence);
+  }
+  return out;
+}
+
+void check_intersection(vec3 start, vec3 dir) {
+
+  bvh_ray ray;
+  bvh_ray_init(&ray, start, dir, 0, 100000);
+  LAST_RAY_COUNT = 0;
+  bvh_ray_query_tight(&ENTITY_BVH, &ray, &ray_cb, 0);
 }
 
 void sim_loop(float delta_time) {

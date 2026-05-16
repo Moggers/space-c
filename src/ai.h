@@ -12,6 +12,7 @@
 #include <string.h>
 #include <vulkan/vulkan_core.h>
 
+#define AIM_IDLE 0
 #define AIM_KILL 1
 #define AIM_COLLECT 2
 #define AIM_DOCKING 3
@@ -97,6 +98,7 @@ void ai_ship_select_tasks() {
     }
     if (ENTITY_ACCEPTED_CONTRACT[ship]) {
       uint32_t contract = ENTITY_ACCEPTED_CONTRACT[ship];
+      uint32_t issuer   = CONTRACT_ISSUING_ENTITY[contract];
       switch (CONTRACT_TYPE[contract]) {
       case CONTRACT_ORE: {
 
@@ -106,13 +108,39 @@ void ai_ship_select_tasks() {
               ENTITY_INVENTORY_ITEMS[ship][k] == ItemOre) {
             AI_TARGETS[ship] = CONTRACT_ISSUING_ENTITY[contract];
             AI_MODE[ship]    = AIM_DOCKING;
-            uint32_t model   = ENTITY_MODEL[AI_TARGETS[ship]];
-            map_t *map       = MODEL_MAP[model];
-            map_entity *entity;
+            if (ENTITY_DOCKED[ship]) {
+              int32_t recipient_slot = -1;
+              for (uint32_t rslot = 0; rslot < INVENTORY_SLOTS; rslot++) {
+                if (ENTITY_INVENTORY_ITEMS[issuer][rslot] ==
+                        ENTITY_INVENTORY_ITEMS[ship][k] ||
+                    ENTITY_INVENTORY_COUNT[issuer][rslot] == 0) {
+                  recipient_slot = rslot;
+                }
+              }
+              if (recipient_slot > -1) {
+                ENTITY_INVENTORY_COUNT[issuer][recipient_slot] +=
+                    ENTITY_INVENTORY_COUNT[ship][k];
+                ENTITY_INVENTORY_ITEMS[issuer][k] =
+                    ENTITY_INVENTORY_ITEMS[ship][k];
+                ENTITY_INVENTORY_ITEMS[ship][k] = 0;
+                ENTITY_DOCKING[ship][0]         = 0;
+                ENTITY_DOCKING[ship][1]         = 0;
+                ENTITY_DOCKED[ship]             = 0;
+                AI_ALIGN_TO[ship]               = 0;
+                AI_MODE[ship]                   = AIM_IDLE;
+                break;
+              }
+            }
+            uint32_t model = ENTITY_MODEL[AI_TARGETS[ship]];
+            map_t *map     = MODEL_MAP[model];
+            float closestdockdist = 999999;
+            uint32_t dockingid;
             for (uint32_t enti = 0; enti < map->entity_count; enti++) {
-              entity                = &map->entities[enti];
+              map_entity *entity    = &map->entities[enti];
               const char *classname = map_entity_get(entity, "classname");
               if (strcmp(classname, "info_landingpad") == 0) {
+
+                // Find docking location and distance
                 vec3 landingpadloc, landingpadnorm;
                 map_entity_get_vec3(entity, "origin", landingpadloc);
                 map_entity_get_vec3(entity, "normal", landingpadnorm);
@@ -122,7 +150,17 @@ void ai_ship_select_tasks() {
                 glm_vec3_add(landingpadnorm, landingpadloc, landingpadloc);
                 glm_mat4_mulv3(ENTITY_TRANSFORM[AI_TARGETS[ship]],
                                landingpadloc, 1, landingpadloc);
-                glm_vec3_copy(landingpadloc, AI_NAVIGATE_TO[ship]);
+                float dockdist =
+                    glm_vec3_distance(landingpadloc, ENTITY_TRANSFORM[ship][3]);
+
+                // If this docking point is closer than any previous discovered
+                if (dockdist < closestdockdist) {
+
+                  // Go there
+                  closestdockdist = dockdist;
+                  glm_vec3_copy(landingpadloc, AI_NAVIGATE_TO[ship]);
+                  dockingid    = enti;
+                }
               }
             }
             float dist = glm_vec3_distance(ENTITY_TRANSFORM[ship][3],
@@ -133,8 +171,8 @@ void ai_ship_select_tasks() {
             if (dist < 3 &&
                 glm_vec3_dot(ENTITY_TRANSFORM[ship][2],
                              ENTITY_TRANSFORM[AI_TARGETS[ship]][2]) > 0.8) {
-              printf("LANDING!!\n");
-              ENTITY_DOCKING[ship] = AI_TARGETS[ship];
+              ENTITY_DOCKING[ship][0] = AI_TARGETS[ship];
+              ENTITY_DOCKING[ship][1] = dockingid;
             }
             break;
           }
@@ -157,8 +195,8 @@ void ai_ship_select_tasks() {
           // Get target location
           glm_vec3_copy(ENTITY_TRANSFORM[target][3], AI_NAVIGATE_TO[ship]);
           // Add inertia of the target
-          glm_vec3_add(ENTITY_INERTIA[target], AI_NAVIGATE_TO[ship],
-                       AI_NAVIGATE_TO[ship]);
+          // glm_vec3_add(ENTITY_INERTIA[target], AI_NAVIGATE_TO[ship],
+          //              AI_NAVIGATE_TO[ship]);
           // Add the maintained distance
           if (ENTITY_SCALE[ship][0] >= ENTITY_SCALE[AI_TARGETS[ship]][0]) {
             ENTITY_COLLECTING[ship] = AI_TARGETS[ship];
@@ -255,7 +293,6 @@ void ai_ship_thrusters() {
       ENTITY_CURRENT_VEC_THRUST[ship][2] = 0.;
       continue;
     }
-    uint32_t target = AI_TARGETS[ship];
     mat4 inv;
     glm_mat4_inv(ENTITY_TRANSFORM[ship], inv);
 

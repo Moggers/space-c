@@ -1,3 +1,4 @@
+#include <float.h>
 #define MAP_LOADER_IMPLEMENTATION
 #define MAP_WINDING_CCW
 #include "./map_loader.h"
@@ -47,17 +48,23 @@ int main(int argc, char *argv[]) {
   vlk_createPipelines();
   UI_CTX = vlk_nk_init();
 
-  map_t asteroid_map, ship_map, station_map;
-  map_load(&asteroid_map, "./assets/asteroid.map");
-  map_load(&station_map, "./assets/station.map");
-  map_load(&ship_map, "./assets/ship.map");
+  map_t cube_map, asteroid_map, ship_map, station_map;
 
-  uint32_t ship_model     = load_model(&ship_map);
-  uint32_t station_model  = load_model(&station_map);
+  map_load(&cube_map, "./assets/cube.map");
+  uint32_t cube_model = load_model(&cube_map);
+  model_set_bvh(cube_model, &cube_map);
+
+  map_load(&asteroid_map, "./assets/asteroid.map");
   uint32_t asteroid_model = load_model(&asteroid_map);
-  model_set_bvh(ship_model, &ship_map);
-  model_set_bvh(station_model, &station_map);
   model_set_bvh(asteroid_model, &asteroid_map);
+
+  map_load(&station_map, "./assets/station.map");
+  uint32_t station_model = load_model(&station_map);
+  model_set_bvh(station_model, &station_map);
+
+  map_load(&ship_map, "./assets/ship.map");
+  uint32_t ship_model = load_model(&ship_map);
+  model_set_bvh(ship_model, &ship_map);
 
   mat4 spawn_location;
 
@@ -65,16 +72,12 @@ int main(int argc, char *argv[]) {
   uint32_t player_faction = faction_create("Player");
   uint32_t mining_faction = faction_create("Mining Corp");
 
-  // Asteroid
+  // Debug marker
   glm_mat4_identity(spawn_location);
-  glm_translate(spawn_location, (vec3){500, 0, 0});
-  uint32_t asteroid =
-      make_entity(spawn_location, 0, (vec3){0.3, 0.3, 0.3}, 0,
-                  (vec3){-1, -1, -1}, asteroid_model, "Asteroid");
-  entity_set_ondeath(asteroid, ONDEATH_SPLIT);
-  entity_set_health(asteroid, 100);
-  entity_set_scale(asteroid, (vec3){64, 64, 64});
-  entity_set_asteroid(asteroid, 1);
+  uint32_t debug_marker = make_entity(spawn_location, 0, (vec3){1, 1, 1}, 0,
+                                      (vec3){-1, -1, -1}, cube_model, "Debug");
+  entity_set_scale(debug_marker, (vec3){0.05, 0.05, 0.05});
+  ENTITY_COLLIDER_GROUP[debug_marker] = 0;
 
   // Player
   glm_mat4_identity(spawn_location);
@@ -85,16 +88,35 @@ int main(int argc, char *argv[]) {
   give_gun(PLAYER_CONTROLLED_ENTITY, 1000, 0.2, ship_model, 1);
   entity_set_ondeath(PLAYER_CONTROLLED_ENTITY, ONDEATH_EXPLODE);
   entity_set_health(PLAYER_CONTROLLED_ENTITY, 5);
-  //
-  // First station
+
+  /*
+  glm_mat4_identity(spawn_location);
+  glm_rotate_x(spawn_location, 45, spawn_location);
+  glm_translate(spawn_location, (vec3){0, 0, 0});
+  uint32_t debug_hull = make_entity(spawn_location, 0, (vec3){0.3, 0.3, 0.3}, 0,
+                                    (vec3){-1, -1, -1}, station_model, "Debug");
+  entity_set_scale(debug_hull, (vec3){0.5, 0.5, 0.5});
+  */
+
+  // Asteroid
   glm_mat4_identity(spawn_location);
   glm_translate(spawn_location, (vec3){0, 0, 0});
+  uint32_t asteroid =
+      make_entity(spawn_location, 0, (vec3){0.3, 0.3, 0.3}, 0,
+                  (vec3){-1, -1, -1}, asteroid_model, "Asteroid");
+  entity_set_ondeath(asteroid, ONDEATH_SPLIT);
+  entity_set_health(asteroid, 100);
+  entity_set_scale(asteroid, (vec3){64, 64, 64});
+  entity_set_asteroid(asteroid, 1);
+
+  // First station
+  glm_mat4_identity(spawn_location);
+  glm_translate(spawn_location, (vec3){500, 0, 0});
   uint32_t station_a =
       make_entity(spawn_location, mining_faction, (vec3){0.7, 0.7, 0.7}, -1,
                   (vec3){-1, -1, -1}, station_model, "Statio A");
   entity_set_health(station_a, 10000);
   entity_set_ondeath(station_a, ONDEATH_EXPLODE);
-  entity_set_scale(station_a, (vec3){1., 1., 1.});
   contract_add(station_a, CONTRACT_ORE, "Deliver Ore", 1);
 
   // Rando AI ship
@@ -106,7 +128,6 @@ int main(int argc, char *argv[]) {
   give_gun(new_ship, 1000, 0.2, ship_model, 1);
   entity_set_ondeath(new_ship, ONDEATH_EXPLODE);
   entity_set_health(new_ship, 5);
-
   // Timings
   float time;
 
@@ -164,10 +185,10 @@ int main(int argc, char *argv[]) {
                ray_origin[2]);
         printf("Dir : %f,%f,%f\n", ray_dir[0], ray_dir[1], ray_dir[2]);
 
-        check_intersection(ray_origin, ray_dir);
-        if (LAST_RAY_COUNT > 0) {
+        ri_userdata output = ray_intersection(ray_origin, ray_dir);
+        if (output.best_t < FLT_MAX) {
           printf("Opening context menu\n");
-          ui_open_context_menu_for(LAST_RAY_ENTITY_IDS[0]);
+          ui_open_context_menu_for(output.best_entity);
         }
         break;
       }
@@ -242,6 +263,15 @@ int main(int argc, char *argv[]) {
       };
       glm_translate(GAME_CAM_TRANSFORM, movedir);
     } else {
+      if (keys[SDL_SCANCODE_R]) {
+        ri_userdata riu =
+            ray_intersection(ENTITY_TRANSFORM[PLAYER_CONTROLLED_ENTITY][3],
+                             ENTITY_TRANSFORM[PLAYER_CONTROLLED_ENTITY][2]);
+        glm_vec3_copy(riu.incidence, ENTITY_TRANSFORM[debug_marker][3]);
+      }
+      if (keys[SDL_SCANCODE_BACKSPACE]) {
+        glm_vec3_zero(ENTITY_INERTIA[PLAYER_CONTROLLED_ENTITY]);
+      }
       ENTITY_CURRENT_VEC_THRUST[PLAYER_CONTROLLED_ENTITY][2] =
           (keys[SDL_SCANCODE_A] - keys[SDL_SCANCODE_D]) *
           ENTITY_VEC_THRUST[PLAYER_CONTROLLED_ENTITY];

@@ -40,7 +40,7 @@ void ui_draw(SDL_Window *win) {
     if (nk_begin(UI_CTX, "ctxmenu", nk_rect(CTX_MENU_X, CTX_MENU_Y, 70, 100),
                  NK_WINDOW_NO_SCROLLBAR)) {
       nk_layout_row_static(UI_CTX, 15, 70, 1);
-      if (nk_button_label(UI_CTX, "contracts")) {
+      if (nk_button_label(UI_CTX, "info")) {
         UI_CTRCTS_ENTITYID    = CONTEXT_MENU_ENTITYID;
         CTRCT_X               = fmin(winwidth - 600, mousex);
         CTRCT_Y               = CTX_MENU_Y;
@@ -58,13 +58,12 @@ void ui_draw(SDL_Window *win) {
     nk_style_pop_style_item(UI_CTX);
   }
   if (UI_CTRCTS_ENTITYID != -1) {
-    if (nk_begin(UI_CTX, "Contracts", nk_rect(CTRCT_X, CTRCT_Y, 600, 600),
+    if (nk_begin(UI_CTX, "Info", nk_rect(CTRCT_X, CTRCT_Y, 600, 600),
                  NK_WINDOW_MOVABLE | NK_WINDOW_SCALABLE | NK_WINDOW_TITLE |
                      NK_WINDOW_CLOSABLE)) {
-      nk_layout_row_dynamic(UI_CTX, 40, 1);
-      char header[64];
-      sprintf(header, "Contracts for %s", ENTITY_NAME[UI_CTRCTS_ENTITYID]);
-      nk_label(UI_CTX, header, NK_TEXT_ALIGN_LEFT);
+
+      nk_layout_row_dynamic(UI_CTX, 20, 1);
+      nk_label(UI_CTX, "Contracts", NK_TEXT_ALIGN_LEFT);
       char amount[32];
       for (uint32_t i = 0; i < 32; i++) {
         uint32_t contract_id = ENTITY_CONTRACTS[UI_CTRCTS_ENTITYID][i];
@@ -85,10 +84,28 @@ void ui_draw(SDL_Window *win) {
                    NK_TEXT_LEFT);
         }
       }
+      nk_label(UI_CTX, "Inventory", NK_TEXT_ALIGN_LEFT);
+      nk_layout_row_dynamic(UI_CTX, 20, 2);
+      nk_label(UI_CTX, "Item", NK_TEXT_LEFT);
+      nk_label(UI_CTX, "Amount", NK_TEXT_LEFT);
+      for (uint32_t i = 0; i < INVENTORY_SLOTS; i++) {
+        uint32_t itype = ENTITY_INVENTORY_ITEMS[UI_CTRCTS_ENTITYID][i];
+        char amt[32];
+        sprintf(amt, "%d", ENTITY_INVENTORY_COUNT[UI_CTRCTS_ENTITYID][i]);
+        if (itype != 0) {
+          switch (itype) {
+          case ItemOre: {
+            nk_label(UI_CTX, "Ore", NK_TEXT_RIGHT);
+            break;
+          }
+          }
+          nk_label(UI_CTX, amount, NK_TEXT_RIGHT);
+        }
+      }
     }
     nk_end(UI_CTX);
   }
-  if (nk_window_is_hidden(UI_CTX, "Contracts")) {
+  if (nk_window_is_hidden(UI_CTX, "Info")) {
     UI_CTRCTS_ENTITYID = -1;
   }
 }
