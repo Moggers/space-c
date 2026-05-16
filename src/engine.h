@@ -326,14 +326,6 @@ void death_animations(float delta_time) {
   }
 }
 
-uint32_t LAST_RAY_ENTITY_IDS[32];
-uint32_t LAST_RAY_COUNT = 0;
-int ray_cb(uint32_t prim_index, bvh_ray *ray, void *user) {
-  uint32_t eid                        = AABB_IDS[prim_index];
-  LAST_RAY_ENTITY_IDS[LAST_RAY_COUNT] = eid;
-  return ++LAST_RAY_COUNT < 32;
-}
-
 void do_collisions() { bvh_self_overlap(&ENTITY_BVH, handle_collision, 0); }
 
 void fire_guns(float delta_time) {
@@ -543,14 +535,6 @@ ri_userdata ray_intersection(vec3 origin, vec3 dir) {
                    out.incidence);
   }
   return out;
-}
-
-void check_intersection(vec3 start, vec3 dir) {
-
-  bvh_ray ray;
-  bvh_ray_init(&ray, start, dir, 0, 100000);
-  LAST_RAY_COUNT = 0;
-  bvh_ray_query_tight(&ENTITY_BVH, &ray, &ray_cb, 0);
 }
 
 void sim_loop(float delta_time) {
