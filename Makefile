@@ -47,7 +47,7 @@ bin/shaders/ui_vertex.spv: src/shaders/ui.vert | bin
 bin/shaders/select.spv: src/shaders/distinct.comp | bin
 	glslc $< -o $@
 
-bin/assets: assets scripts/copy-assets.sh | bin
+bin/assets: assets/* scripts/copy-assets.sh | bin
 	./scripts/copy-assets.sh assets bin/assets
 
 profile: export DEBUGINFOD_URLS=https://debuginfod.archlinux.org

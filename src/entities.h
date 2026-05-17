@@ -10,6 +10,8 @@
 typedef enum InventoryTypes { ItemOre = 1 } InventoryTypes;
 #define INVENTORY_SLOTS 32
 
+uint32_t DEBUG_MARKERS[10];
+
 // ETNTIY STUFF
 int32_t ENTITY_COUNT;
 mat4 ENTITY_TRANSFORM[MAX_ENTITIES];

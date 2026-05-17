@@ -8,6 +8,7 @@
 #include "map_loader.h"
 #include "physics.h"
 #include "vendor/cglm/mat4.h"
+#include "vendor/cglm/util.h"
 #include "vendor/cglm/vec3.h"
 #include <string.h>
 #include <vulkan/vulkan_core.h>
@@ -18,7 +19,6 @@
 #define AIM_DOCKING 3
 #define AIM_LANDING 3
 
-float AI_MAINTAIN_DIST[MAX_ENTITIES];
 uint32_t AI_TARGETS[MAX_ENTITIES];
 uint32_t AI_MODE[MAX_ENTITIES];
 vec3 AI_NAVIGATE_TO[MAX_ENTITIES];
@@ -131,8 +131,8 @@ void ai_ship_select_tasks() {
                 break;
               }
             }
-            uint32_t model = ENTITY_MODEL[AI_TARGETS[ship]];
-            map_t *map     = MODEL_MAP[model];
+            uint32_t model        = ENTITY_MODEL[AI_TARGETS[ship]];
+            map_t *map            = MODEL_MAP[model];
             float closestdockdist = 999999;
             uint32_t dockingid;
             for (uint32_t enti = 0; enti < map->entity_count; enti++) {
@@ -155,11 +155,14 @@ void ai_ship_select_tasks() {
 
                 // If this docking point is closer than any previous discovered
                 if (dockdist < closestdockdist) {
-
                   // Go there
                   closestdockdist = dockdist;
+                  vec3 heading, controlledpos;
+                  glm_vec3_sub(landingpadloc, ENTITY_TRANSFORM[ship][3],
+                               heading);
+                  glm_vec3_norm(heading);
                   glm_vec3_copy(landingpadloc, AI_NAVIGATE_TO[ship]);
-                  dockingid    = enti;
+                  dockingid = enti;
                 }
               }
             }
@@ -190,18 +193,19 @@ void ai_ship_select_tasks() {
                                            ENTITY_TRANSFORM[ship][3][2]},
                            .max_dist_sq = 9999999},
             target_asteroid_cb, &ship);
+
         if (AI_TARGETS[ship] != -1) {
           uint32_t target = AI_TARGETS[ship];
           // Get target location
           glm_vec3_copy(ENTITY_TRANSFORM[target][3], AI_NAVIGATE_TO[ship]);
           // Add inertia of the target
-          // glm_vec3_add(ENTITY_INERTIA[target], AI_NAVIGATE_TO[ship],
-          //              AI_NAVIGATE_TO[ship]);
-          // Add the maintained distance
+          vec3 targinertia;
+          glm_vec3_copy(ENTITY_INERTIA[target], targinertia);
+          glm_vec3_scale(targinertia, 2, targinertia);
+          glm_vec3_add(targinertia, AI_NAVIGATE_TO[ship], AI_NAVIGATE_TO[ship]);
           if (ENTITY_SCALE[ship][0] >= ENTITY_SCALE[AI_TARGETS[ship]][0]) {
             ENTITY_COLLECTING[ship] = AI_TARGETS[ship];
             AI_MODE[ship]           = AIM_COLLECT;
-            AI_MAINTAIN_DIST[ship]  = ENTITY_SCALE[ship][0];
           } else {
             AI_MODE[ship]    = AIM_KILL;
             float *targscale = ENTITY_SCALE[AI_TARGETS[ship]];
@@ -209,10 +213,9 @@ void ai_ship_select_tasks() {
             float maxsize =
                 fmax(targscale[0], fmax(targscale[1], targscale[2])) * 2 +
                 fmax(shipscale[0], fmax(shipscale[1], shipscale[2])) * 4;
-            AI_MAINTAIN_DIST[ship] = maxsize;
           }
+          break;
         }
-        break;
       }
       }
     }
@@ -298,7 +301,21 @@ void ai_ship_thrusters() {
 
     // Get target location
     vec3 rel_target_location;
-    glm_vec3_copy(AI_NAVIGATE_TO[ship], rel_target_location);
+
+    // Find a correction location
+    float gapsize = 0;
+    gapsize += glm_vec3_distance(ENTITY_INERTIA[ship],
+                                 (vec3){
+                                     0,
+                                     0,
+                                 }) /
+               3;
+    gapsize += glm_max(ENTITY_SCALE[ship][0],
+                       glm_max(ENTITY_SCALE[ship][1], ENTITY_SCALE[ship][2]));
+    find_correction_location(ENTITY_TRANSFORM[ship][3], AI_NAVIGATE_TO[ship],
+                             gapsize, rel_target_location);
+    glm_vec3_copy(rel_target_location, ENTITY_TRANSFORM[DEBUG_MARKERS[0]][3]);
+    glm_vec3_copy(AI_NAVIGATE_TO[ship], ENTITY_TRANSFORM[DEBUG_MARKERS[1]][3]);
 
     // Get raw target location relative to ship coordinates normalized
     vec3 target_heading;
@@ -321,18 +338,10 @@ void ai_ship_thrusters() {
         glm_clamp(target_heading[0] * 5, -ENTITY_VEC_THRUST[ship],
                   ENTITY_VEC_THRUST[ship]);
 
-    // Add the maintained distance
-    vec3 backheading;
-    glm_vec3_sub(ENTITY_TRANSFORM[ship][3], rel_target_location, backheading);
-    glm_vec3_normalize(backheading);
-    glm_vec3_scale(backheading, AI_MAINTAIN_DIST[ship], backheading);
-    // Add the offset to t e target location
-    glm_vec3_add(backheading, rel_target_location, rel_target_location);
-
     // Add inverse of velocity (dampening)
     vec3 delta_v;
     glm_vec3_sub((vec3){0., 0., 0.}, ENTITY_INERTIA[ship], delta_v);
-    glm_vec3_scale(delta_v, 1, delta_v);
+    glm_vec3_scale(delta_v, 2, delta_v);
     glm_vec3_add(rel_target_location, delta_v, rel_target_location);
     // Transform target location into local coordinates
     glm_mat4_mulv3(inv, rel_target_location, 1, rel_target_location);
