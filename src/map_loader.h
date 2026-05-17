@@ -115,6 +115,12 @@ typedef struct {
      * map_load. May be 0 if a brush is degenerate. */
     uint32_t first_index;
     uint32_t index_count;
+
+    /* Set by map_load if this face is coplanar with an oppositely-oriented
+     * face on a different brush in the same entity, and their polygons
+     * overlap. 
+     */
+    uint8_t is_interior;
 } map_face;
 
 typedef struct {
@@ -602,6 +608,102 @@ fail:
     return 1;
 }
 
+/* ---- Seam tagging ----
+ *
+ * Two faces on different brushes are an interior when they share
+ * a plane (coplanar, opposing normals) and their polygons overlap on
+ * that plane. Detected per entity in O(brush_count^2) — fine because
+ * brush counts within an entity are small and this runs once at load. */
+
+static void map__tag_interiors(map_entity* e) {
+    enum { MAP__POLY_MAX = 64 };
+
+    for (uint32_t i = 0; i < e->brush_count; ++i) {
+        map_brush* bi = &e->brushes[i];
+        for (uint32_t j = i + 1; j < e->brush_count; ++j) {
+            map_brush* bj = &e->brushes[j];
+
+            for (uint32_t fi = 0; fi < bi->face_count; ++fi) {
+                map_face* fa = &bi->faces[fi];
+                if (fa->index_count < 3 || fa->index_count > MAP__POLY_MAX)
+                    continue;
+
+                for (uint32_t fj = 0; fj < bj->face_count; ++fj) {
+                    map_face* fb = &bj->faces[fj];
+                    if (fb->index_count < 3 || fb->index_count > MAP__POLY_MAX)
+                        continue;
+
+                    float dot = fa->normal[0]*fb->normal[0] +
+                                fa->normal[1]*fb->normal[1] +
+                                fa->normal[2]*fb->normal[2];
+                    if (dot > -1.0f + MAP__EPS) continue;
+                    if (fabsf(fa->dist + fb->dist) > MAP__EPS) continue;
+
+                    /* Project both polygons onto a shared 2D basis in
+                     * the plane. */
+                    float u[3], v[3];
+                    map__face_basis(fa->normal, u, v);
+
+                    float a2d[MAP__POLY_MAX][2];
+                    float b2d[MAP__POLY_MAX][2];
+                    uint32_t na = fa->index_count;
+                    uint32_t nb = fb->index_count;
+
+                    for (uint32_t k = 0; k < na; ++k) {
+                        float* p = bi->vertices[bi->indices[fa->first_index + k]];
+                        a2d[k][0] = p[0]*u[0] + p[1]*u[1] + p[2]*u[2];
+                        a2d[k][1] = p[0]*v[0] + p[1]*v[1] + p[2]*v[2];
+                    }
+                    for (uint32_t k = 0; k < nb; ++k) {
+                        float* p = bj->vertices[bj->indices[fb->first_index + k]];
+                        b2d[k][0] = p[0]*u[0] + p[1]*u[1] + p[2]*u[2];
+                        b2d[k][1] = p[0]*v[0] + p[1]*v[1] + p[2]*v[2];
+                    }
+
+                    /* Containment, not overlap: mark face X as interior
+                     * only if X's polygon is fully inside the other's.
+                     * For convex polygons this reduces to "every vertex
+                     * of X is on the consistent (interior) side of every
+                     * edge of the other." Asymmetric on purpose: a small
+                     * brush sitting on a large brush hides its own face
+                     * but only a sliver of the large brush's face, which
+                     * should stay visible / navigable. */
+                    for (int side = 0; side < 2; ++side) {
+                        float (*inner)[2] = side ? b2d : a2d;
+                        uint32_t n_inner  = side ? nb : na;
+                        float (*outer)[2] = side ? a2d : b2d;
+                        uint32_t n_outer  = side ? na : nb;
+
+                        int contained = 1;
+                        for (uint32_t k = 0; k < n_inner && contained; ++k) {
+                            int sign = 0;
+                            for (uint32_t m = 0; m < n_outer; ++m) {
+                                uint32_t mn = (m + 1) % n_outer;
+                                float ex = outer[mn][0] - outer[m][0];
+                                float ey = outer[mn][1] - outer[m][1];
+                                float dx = inner[k][0] - outer[m][0];
+                                float dy = inner[k][1] - outer[m][1];
+                                float cross = ex*dy - ey*dx;
+                                if      (cross >  MAP__EPS) {
+                                    if (sign < 0) { contained = 0; break; }
+                                    sign = 1;
+                                } else if (cross < -MAP__EPS) {
+                                    if (sign > 0) { contained = 0; break; }
+                                    sign = -1;
+                                }
+                            }
+                        }
+                        if (contained) {
+                            if (side) fb->is_interior = 1;
+                            else      fa->is_interior = 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /* ---- Parsing ---- */
 
 static int map__parse_face(map__lex* l, map_face* f) {
@@ -698,6 +800,7 @@ static int map__parse_entity(map__lex* l, map_entity* e) {
     e->keys    = keys;
     e->values  = values;
     e->brushes = brushes;
+    map__tag_interiors(e);
     return 0;
 
 fail:
@@ -856,6 +959,7 @@ int map_brush_triangulate(const map_brush* b,
 
     uint32_t tri_count = 0;
     for (uint32_t f = 0; f < b->face_count; ++f) {
+        if (b->faces[f].is_interior) continue;
         if (b->faces[f].index_count >= 3)
             tri_count += b->faces[f].index_count - 2;
     }
@@ -869,6 +973,7 @@ int map_brush_triangulate(const map_brush* b,
     char* w = (char*)out_buf;
     for (uint32_t f = 0; f < b->face_count; ++f) {
         const map_face* face = &b->faces[f];
+        if (face->is_interior) continue;
         if (face->index_count < 3) continue;
         const uint32_t* idx = &b->indices[face->first_index];
         const float*    n   = face->normal;

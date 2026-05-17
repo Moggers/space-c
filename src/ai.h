@@ -311,7 +311,7 @@ void ai_ship_thrusters() {
                                  }) /
                3;
     gapsize += glm_max(ENTITY_SCALE[ship][0],
-                       glm_max(ENTITY_SCALE[ship][1], ENTITY_SCALE[ship][2]));
+                       glm_max(ENTITY_SCALE[ship][1], ENTITY_SCALE[ship][2])) * 4;
     find_correction_location(ENTITY_TRANSFORM[ship][3], AI_NAVIGATE_TO[ship],
                              gapsize, rel_target_location);
     glm_vec3_copy(rel_target_location, ENTITY_TRANSFORM[DEBUG_MARKERS[0]][3]);

@@ -239,14 +239,21 @@ int ray_intersection_cb(uint32_t prim, bvh_ray *r, void *userdata) {
   glm_mat4_mulv3(inv, r->origin, 1, no);
   glm_vec3_div(no, ENTITY_SCALE[striking], no);
   glm_vec3_rotate_m4(inv, r->dir, nd);
-  bvh_ray_init(&ray, no, nd, 0, 1000);
+  bvh_ray_init(&ray, no, nd, 0, 100000);
+  ri_userdata new_out;
+  memcpy(&new_out, userdata, sizeof(ri_userdata));
   risu_userdata risu = {
       .map    = MODEL_MAP[ENTITY_MODEL[striking]],
       .entity = striking,
-      .out    = userdata,
+      .out    = &new_out,
   };
   bvh_ray_query_tight(&MODEL_HULLS[ENTITY_MODEL[striking]], &ray,
                       ray_intersection_subcb, &risu);
+  if (new_out.incident_entity != 0 &&
+      glm_vec3_distance(new_out.incidence, r->origin) <
+          glm_vec3_distance(((ri_userdata *)userdata)->incidence, r->origin)) {
+    memcpy(userdata, &new_out, sizeof(ri_userdata));
+  }
   return 0;
 }
 
@@ -259,7 +266,7 @@ typedef struct IntersectionResult {
 
 IntersectionResult ray_intersection(vec3 origin, vec3 dir) {
   bvh_ray ray;
-  bvh_ray_init(&ray, origin, dir, 0, 10000);
+  bvh_ray_init(&ray, origin, dir, 0, 100);
   ri_userdata out = {.best_t = FLT_MAX};
   bvh_ray_query_tight(&ENTITY_BVH, &ray, ray_intersection_cb, &out);
   if (out.best_t != FLT_MAX) {
@@ -301,9 +308,53 @@ void find_correction_location(vec3 start, vec3 dest, float gapsize, vec3 out) {
     glm_vec3_cross(heading_dir, transformednorm, heading_dir);
     glm_vec3_normalize(heading_dir);
 
+    // SLOP STARTS HERE
+    // If the point projected onto the hit plane lies within the polygon, we
+    // cannot navigate in its direction along the polygon, since we'll end up
+    // stuck at a point; in that case we instead flip the heading to navigate
+    // along the face *away* from the target.
+    vec3 target_proj;
+    {
+      vec3 dest_rel;
+      glm_vec3_sub(dest, r.incident_point, dest_rel);
+      float along_n = glm_vec3_dot(dest_rel, transformednorm);
+      vec3 normal_component;
+      glm_vec3_scale(transformednorm, along_n, normal_component);
+      glm_vec3_sub(dest, normal_component, target_proj);
+    }
+    int in_shadow = 1;
+    for (uint32_t k = 0; k < r.incident_face->index_count; k++) {
+      uint32_t i0 = r.incident_brush->indices[r.incident_face->first_index + k];
+      uint32_t i1 =
+          r.incident_brush->indices[r.incident_face->first_index +
+                                    ((k + 1) % r.incident_face->index_count)];
+      vec3 v0, v1;
+      glm_mat4_mulv3(ENTITY_TRANSFORM[r.incident_entity],
+                     r.incident_brush->vertices[i0], 1, v0);
+      glm_mat4_mulv3(ENTITY_TRANSFORM[r.incident_entity],
+                     r.incident_brush->vertices[i1], 1, v1);
+      vec3 edge, outward, rel;
+      glm_vec3_sub(v1, v0, edge);
+      glm_vec3_cross(edge, transformednorm, outward);
+      glm_vec3_sub(target_proj, v0, rel);
+      if (glm_vec3_dot(rel, outward) > 0) {
+        in_shadow = 0;
+        break;
+      }
+    }
+    if (in_shadow) {
+      glm_vec3_inv(heading_dir);
+    }
+    // SLOP ENDS HERE
+
     float best_t = FLT_MAX;
     for (uint32_t j = 0; j < r.incident_brush->face_count; j++) {
       map_face *f = &r.incident_brush->faces[j];
+
+      // Ignore interior faces; we can't navigate out via those.
+      if(f->is_interior) {
+        continue;
+      }
 
       // Get the normal in world orientation
       vec3 normalworld;
