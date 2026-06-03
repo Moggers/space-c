@@ -120,7 +120,7 @@ void ai_ship_select_tasks() {
               if (recipient_slot > -1) {
                 ENTITY_INVENTORY_COUNT[issuer][recipient_slot] +=
                     ENTITY_INVENTORY_COUNT[ship][k];
-                ENTITY_INVENTORY_ITEMS[issuer][k] =
+                ENTITY_INVENTORY_ITEMS[issuer][recipient_slot] =
                     ENTITY_INVENTORY_ITEMS[ship][k];
                 ENTITY_INVENTORY_ITEMS[ship][k] = 0;
                 ENTITY_DOCKING[ship][0]         = 0;

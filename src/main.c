@@ -129,7 +129,7 @@ int main(int argc, char *argv[]) {
   glm_translate(spawn_location, (vec3){0, 0, 20});
   uint32_t new_ship =
       make_entity(spawn_location, mining_faction, (vec3){0.3, 0.3, 0.4}, 1,
-                  (vec3){20, 20, 100}, ship_model, "AI Ship");
+                  (vec3){20, 20, 100}, miner_model, "AI Ship");
   give_gun(new_ship, 1000, 0.2, ship_model, 1);
   entity_set_ondeath(new_ship, ONDEATH_EXPLODE);
   entity_set_health(new_ship, 5);

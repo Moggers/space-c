@@ -1,5 +1,5 @@
 CC = cc
-CFLAGS = -g -Wall 
+CFLAGS = -g -Wall -O3
 LDFLAGS = -lSDL3 -lvulkan -lm
 BROWSER = vivaldi
 
